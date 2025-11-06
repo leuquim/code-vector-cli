@@ -1,0 +1,17 @@
+# Core dependencies
+torch>=2.0.0
+sentence-transformers>=2.2.0
+transformers>=4.30.0
+
+# Tree-sitter for AST parsing (version pinned due to compatibility)
+tree-sitter>=0.20.0,<0.21
+tree-sitter-languages>=1.10.0
+
+# Vector database
+qdrant-client>=1.7.0
+
+# Configuration
+python-dotenv>=1.0.0
+
+# Optional: OpenAI embeddings (for faster indexing)
+openai>=1.0.0

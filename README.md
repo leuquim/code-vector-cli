@@ -1,0 +1,319 @@
+# Code Vector CLI
+
+A fast, local semantic code search tool powered by vector embeddings. Index your codebase once, then search using natural language queries to find relevant code instantly.
+
+## Features
+
+- **Semantic Code Search**: Find code by meaning, not just keywords
+- **Multi-Repository Support**: Index entire workspaces with multiple projects
+- **AST-Aware Chunking**: Intelligently splits code at function/class boundaries using Tree-sitter
+- **Fast Local or Cloud Embeddings**: Choose between local models (CodeT5+, mpnet) or OpenAI embeddings
+- **Qdrant Vector Database**: High-performance vector storage with collections for functions, classes, and files
+- **Incremental Indexing**: Update only changed files (coming soon)
+- **Cross-Repo Search**: Search across all indexed repositories simultaneously
+
+## Installation
+
+### Prerequisites
+
+- Python 3.8+
+- [Qdrant](https://qdrant.tech/) vector database running locally (or remote)
+- Git (for multi-repo workspace detection)
+
+### Install Qdrant
+
+```bash
+# Using Docker (recommended)
+docker pull qdrant/qdrant
+docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage qdrant/qdrant
+
+# Or using native binary - see https://qdrant.tech/documentation/quick-start/
+```
+
+### Install Code Vector CLI
+
+```bash
+# Clone the repository
+git clone https://github.com/leuquim/code-vector-cli.git
+cd code-vector-cli
+
+# Install with pip
+pip install -e .
+
+# Or install from PyPI (once published)
+pip install code-vector-cli
+```
+
+## Quick Start
+
+### 1. Index Your Codebase
+
+```bash
+# Index a single project
+code-vector-cli index /path/to/your/project
+
+# Index a multi-repo workspace (auto-detects git repos)
+code-vector-cli index /path/to/workspace
+```
+
+### 2. Search Your Code
+
+```bash
+# Search for code related to "authentication logic"
+code-vector-cli search /path/to/your/project "authentication logic" --limit 5
+
+# Search only in functions
+code-vector-cli search /path/to/your/project "error handling" --collection functions
+
+# Search across all collections
+code-vector-cli search /path/to/your/project "database connection"
+```
+
+### 3. View Index Statistics
+
+```bash
+code-vector-cli stats /path/to/your/project
+```
+
+## Configuration
+
+### Using OpenAI Embeddings (Faster, Requires API Key)
+
+For better performance on large codebases, you can use OpenAI embeddings:
+
+```bash
+# Create ~/.code-vector-db.env
+echo "USE_OPENAI_EMBEDDINGS=true" >> ~/.code-vector-db.env
+echo "OPENAI_API_KEY=sk-your-api-key-here" >> ~/.code-vector-db.env
+```
+
+**Performance Comparison** (5000+ PHP files):
+- Local embeddings (CodeT5+): ~12-15 minutes
+- OpenAI embeddings: ~2-4 minutes
+
+### Using Local Embeddings (Free, No API Key Needed)
+
+By default, the tool uses local models:
+- **Code**: Salesforce/codet5p-110m-embedding (256 dimensions)
+- **Text**: sentence-transformers/all-mpnet-base-v2 (768 dimensions)
+
+Models are automatically downloaded on first use to `~/.local/share/code-vector-db/models/`.
+
+### Advanced Configuration
+
+Create `~/.code-vector-db.env` to customize:
+
+```bash
+# OpenAI settings
+USE_OPENAI_EMBEDDINGS=true
+OPENAI_API_KEY=sk-your-key
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+
+# Qdrant connection
+QDRANT_HOST=localhost
+QDRANT_PORT=6333
+```
+
+## Usage
+
+### Indexing Commands
+
+```bash
+# Index entire workspace
+code-vector-cli index /path/to/workspace
+
+# Reindex specific repository in multi-repo workspace
+code-vector-cli index /path/to/workspace --repo frontend
+
+# Force reindex (delete and recreate)
+code-vector-cli delete /path/to/workspace --force
+code-vector-cli index /path/to/workspace
+```
+
+### Search Commands
+
+```bash
+# Basic search
+code-vector-cli search /path/to/project "query string"
+
+# Search specific collection
+code-vector-cli search /path/to/project "query" --collection functions
+code-vector-cli search /path/to/project "query" --collection classes
+code-vector-cli search /path/to/project "query" --collection files
+
+# Limit results
+code-vector-cli search /path/to/project "query" --limit 10
+
+# Filter by file extension (multi-repo only)
+code-vector-cli search /path/to/workspace "query" --file-ext .py
+```
+
+### Management Commands
+
+```bash
+# View index statistics
+code-vector-cli stats /path/to/project
+
+# List all indexed projects
+code-vector-cli list
+
+# Delete index for a project
+code-vector-cli delete /path/to/project --force
+```
+
+## Architecture
+
+### Collections
+
+The tool creates separate Qdrant collections for different code granularities:
+
+- **code_functions**: Individual functions/methods
+- **code_classes**: Classes and their methods
+- **code_files**: Entire files (when no AST available)
+- **documentation**: Markdown and docs (future)
+- **git_history**: Commit messages (future)
+- **conversations**: Chat history (future)
+
+### Multi-Repo Workspace
+
+When indexing a directory with multiple git repositories:
+
+1. Auto-detects all git repos in subdirectories
+2. Creates repo metadata (name, path, main branch)
+3. Tags all vectors with `repo_name` for filtering
+4. Enables cross-repo search with `--repo` filter
+
+### Chunking Strategy
+
+Uses Tree-sitter AST parsing to intelligently chunk code:
+
+- **Functions**: Extracted with full signature and body
+- **Classes**: Split into class definition + individual methods
+- **Fallback**: Character-based chunking for non-parseable files
+
+### Performance Optimizations
+
+- **Parallel Parsing**: Uses 50% of CPU cores (8 workers on 16-core CPU)
+- **Batch Processing**: 800 files per batch
+- **Parallel Embedding**: ThreadPoolExecutor for concurrent API calls (OpenAI)
+- **Smart Batching**: Dynamic batch sizing based on text characteristics
+- **Rate Limit Handling**: Automatic retry with exponential backoff
+
+## Supported Languages
+
+Currently optimized for:
+- PHP
+- Python
+- JavaScript/TypeScript
+- Go
+- Rust
+- Java
+
+Additional languages can be added by configuring Tree-sitter grammars in `ast_chunker.py`.
+
+## Troubleshooting
+
+### Tree-sitter Version Issues
+
+If you see `TypeError: __init__() takes exactly 1 argument (2 given)`:
+
+```bash
+pip install 'tree-sitter<0.21' --upgrade
+```
+
+### Qdrant Connection Failed
+
+Ensure Qdrant is running:
+
+```bash
+docker ps | grep qdrant
+curl http://localhost:6333/collections
+```
+
+### OpenAI Rate Limits
+
+The tool automatically retries with exponential backoff. For very large codebases, consider:
+
+1. Reducing concurrent requests in `embeddings.py` (MAX_CONCURRENT_REQUESTS)
+2. Using local embeddings instead
+3. Indexing repositories individually with `--repo` flag
+
+### Vector Dimension Mismatch
+
+If you switch between local and OpenAI embeddings, delete and reindex:
+
+```bash
+code-vector-cli delete /path/to/project --force
+code-vector-cli index /path/to/project
+```
+
+## Development
+
+### Project Structure
+
+```
+code-vector-cli/
+├── code_vector_db/
+│   ├── __init__.py
+│   ├── embeddings.py          # Embedding models (local + OpenAI)
+│   ├── vector_store.py        # Qdrant operations
+│   ├── indexer.py             # Main indexing logic
+│   ├── workspace_indexer.py   # Multi-repo support
+│   ├── ast_chunker.py         # Tree-sitter parsing
+│   ├── query.py               # Search interface
+│   └── metadata.py            # Project tracking
+├── bin/
+│   └── code-vector-cli        # CLI entry point
+├── setup.py
+├── requirements.txt
+└── README.md
+```
+
+### Running Tests
+
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
+
+# Run tests (when available)
+pytest
+```
+
+### Contributing
+
+Contributions welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## Roadmap
+
+- [ ] Incremental indexing (only reindex changed files)
+- [ ] Support for documentation (Markdown, RST)
+- [ ] Git history indexing (commit messages, diffs)
+- [ ] Conversation history indexing (chat logs)
+- [ ] VSCode extension
+- [ ] Language server protocol (LSP) integration
+- [ ] More language support (Ruby, C++, C#)
+- [ ] Hybrid search (vector + keyword)
+
+## License
+
+MIT License - see LICENSE file for details
+
+## Acknowledgments
+
+- [Qdrant](https://qdrant.tech/) - Vector database
+- [Tree-sitter](https://tree-sitter.github.io/) - Incremental parsing
+- [Salesforce CodeT5+](https://github.com/salesforce/CodeT5) - Code embeddings
+- [Sentence Transformers](https://www.sbert.net/) - Text embeddings
+- [OpenAI](https://openai.com/) - Optional cloud embeddings
+
+## Support
+
+For issues, questions, or contributions, please visit:
+- GitHub Issues: https://github.com/leuquim/code-vector-cli/issues
+- Discussions: https://github.com/leuquim/code-vector-cli/discussions
