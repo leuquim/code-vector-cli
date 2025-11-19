@@ -2,6 +2,9 @@
 
 A fast, local semantic code search tool powered by vector embeddings. Index your codebase once, then search using natural language queries to find relevant code instantly.
 
+> **⚠️ AI-Built Tool Disclaimer**
+> This tool was fully built using AI assistants (Claude Code) to serve personal use cases and workflows. While functional and actively used, it may contain bugs or edge cases. Contributions, bug reports, and feedback are welcome via GitHub Issues.
+
 ## Features
 
 - **Semantic Code Search**: Find code by meaning, not just keywords
@@ -15,6 +18,25 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 - **Impact Analysis**: Analyze dependencies and find code affected by changes
 - **Context Selection**: AI-powered file selection for specific tasks
 - **Similarity Search**: Find similar code patterns across your codebase
+
+## Claude Code Integration
+
+This tool was designed to work seamlessly with [Claude Code](https://claude.ai/code), Anthropic's AI coding assistant, though it works standalone as well.
+
+### Conversation Indexing
+
+To enable conversation search (index your Claude Code sessions):
+
+1. Enable conversation tracking in Claude Code settings
+2. Conversations are stored in `~/.claude/conversations/`
+3. Index them with: `code-vector-cli index-conversations`
+4. Search conversations: `code-vector-cli search-conversations "deployment issues"`
+
+This allows you to search through past Claude Code sessions to find solutions, decisions, and context from previous work.
+
+### Claude Code Skill
+
+A Claude Code skill is included in `.claude/skills/vector-search.md` that provides Claude with direct access to this tool. Copy it to your project's `.claude/skills/` directory or your global `~/.claude/skills/` for all projects.
 
 ## Installation
 
@@ -36,9 +58,17 @@ docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage qd
 
 ### Install Code Vector CLI
 
-#### Development Installation (Recommended)
+```bash
+# Install from PyPI (once published)
+pip install code-vector-cli
 
-For active development with immediate code changes:
+# Or install directly from GitHub
+pip install git+https://github.com/leuquim/code-vector-cli.git
+```
+
+#### Development Installation
+
+For contributors or if you want immediate code changes without reinstalling:
 
 ```bash
 # Clone the repository
@@ -49,48 +79,40 @@ cd code-vector-cli
 pip install -e .
 ```
 
-With editable mode, any changes you make to the code take effect immediately without reinstalling.
-
-#### Standard Installation
-
-```bash
-# Install from PyPI (once published)
-pip install code-vector-cli
-
-# Or install directly from GitHub
-pip install git+https://github.com/leuquim/code-vector-cli.git
-```
-
 ## Quick Start
+
+**Note:** All commands default to the current working directory. Use `--path /path/to/project` to specify a different location.
 
 ### 1. Index Your Codebase
 
 ```bash
-# Index a single project
-code-vector-cli index /path/to/your/project
+# Navigate to your project
+cd /path/to/your/project
 
-# Index a multi-repo workspace (auto-detects git repos)
-code-vector-cli index /path/to/workspace
+# Index the codebase (creates vector embeddings)
+code-vector-cli index
+
+# Or index a different location
+code-vector-cli index --path /path/to/workspace
 ```
 
 ### 2. Search Your Code
 
 ```bash
-# Search for code related to "authentication logic"
-code-vector-cli search /path/to/your/project "authentication logic" --limit 5
+# Semantic search - finds code by meaning
+code-vector-cli search "authentication logic" --limit 5
 
-# Search only in functions
-code-vector-cli search /path/to/your/project "error handling" --collection functions
-
-# Search across all collections
-code-vector-cli search /path/to/your/project "database connection"
+# Hybrid search - combines semantic + keyword matching
+code-vector-cli search-hybrid "getUserById function"
 ```
 
 ### 3. View Index Statistics
 
 ```bash
-code-vector-cli stats /path/to/your/project
+code-vector-cli stats
 ```
+
+**Vector Database Location:** Index data is stored in `~/.local/share/code-vector-db/qdrant/` with per-project collections.
 
 ## Configuration
 
@@ -133,101 +155,101 @@ QDRANT_PORT=6333
 
 ## Usage
 
-All commands support the `--path` flag to specify the project directory. If omitted, uses current directory.
+All commands operate on the current working directory by default. Use `--path /path/to/project` to target a different location.
 
 ### Indexing Commands
 
 ```bash
 # Initialize and index a new project
-code-vector-cli init --path /path/to/project
+code-vector-cli init
 
 # Index or update existing index
-code-vector-cli index --path /path/to/project
+code-vector-cli index
 
-# Incremental indexing (only changed files)
-code-vector-cli index --path /path/to/project --incremental
+# Incremental indexing (only changed files since last index)
+code-vector-cli index --incremental
 
 # Index specific repository in multi-repo workspace
-code-vector-cli index --path /path/to/workspace --repo frontend
+code-vector-cli index --repo frontend
 
 # Reindex a single file
-code-vector-cli reindex-file --path /path/to/project /relative/path/to/file.py
+code-vector-cli reindex-file relative/path/to/file.py
 ```
 
 ### Search Commands
 
 ```bash
 # Semantic search - find code by meaning
-code-vector-cli search --path /path/to/project "authentication logic"
+code-vector-cli search "authentication logic"
 
 # Adjust result count and score threshold
-code-vector-cli search --path /path/to/project "error handling" --limit 10 --threshold 0.3
+code-vector-cli search "error handling" --limit 10 --threshold 0.3
 
 # Show code snippets in results
-code-vector-cli search --path /path/to/project "database queries" --show-content
+code-vector-cli search "database queries" --show-content
 
 # Show parent class/module information
-code-vector-cli search --path /path/to/project "validation" --show-parent
+code-vector-cli search "validation" --show-parent
 
 # Adjust context lines when showing content
-code-vector-cli search --path /path/to/project "api endpoints" --show-content --context-lines 5
+code-vector-cli search "api endpoints" --show-content --context-lines 5
 
 # Hybrid search - combine semantic understanding with keyword matching
-code-vector-cli search-hybrid --path /path/to/project "login user authentication"
+code-vector-cli search-hybrid "login user authentication"
 
 # Adjust semantic vs keyword weights (defaults: semantic=0.7, keyword=0.3)
-code-vector-cli search-hybrid --path /path/to/project "API rate limit" --semantic-weight 0.5 --bm25-weight 0.5
+code-vector-cli search-hybrid "API rate limit" --semantic-weight 0.5 --bm25-weight 0.5
 
 # Use hybrid search with more keyword focus for specific terms
-code-vector-cli search-hybrid --path /path/to/project "getUserById" --semantic-weight 0.3 --bm25-weight 0.7
+code-vector-cli search-hybrid "getUserById" --semantic-weight 0.3 --bm25-weight 0.7
 ```
 
 ### Similarity & Context Commands
 
 ```bash
 # Find similar code to a specific file
-code-vector-cli similar --path /path/to/project "src/utils/auth.py" --limit 5
+code-vector-cli similar "src/utils/auth.py" --limit 5
 
 # Find similar code by semantic description
-code-vector-cli similar --path /path/to/project "rate limiting middleware"
+code-vector-cli similar "rate limiting middleware"
 
 # Get relevant context for a task (AI-powered file selection)
-code-vector-cli context --path /path/to/project "fix authentication bug"
+code-vector-cli context "fix authentication bug"
 
 # Output context as JSON for tool integration
-code-vector-cli context --path /path/to/project "add user permissions" --json
+code-vector-cli context "add user permissions" --json
 
 # Analyze impact of changes to a file
-code-vector-cli impact --path /path/to/project "src/models/user.py"
+code-vector-cli impact "src/models/user.py"
 ```
 
 ### Documentation & History Search
 
 ```bash
 # Search documentation
-code-vector-cli search-docs --path /path/to/project "api setup"
+code-vector-cli search-docs "api setup"
 
-# Search conversation history
-code-vector-cli search-conversations --path /path/to/project "deployment issues"
+# Search conversation history (requires conversation indexing)
+code-vector-cli search-conversations "deployment issues"
 ```
 
 ### Management Commands
 
 ```bash
 # View index statistics
-code-vector-cli stats --path /path/to/project
+code-vector-cli stats
 
 # List all indexed projects
 code-vector-cli list-projects
 
-# Delete index for a project
-code-vector-cli delete --path /path/to/project --force
+# Delete index for current project
+code-vector-cli delete --force
 
 # Clean up metadata for missing projects
 code-vector-cli cleanup-metadata
 
 # Install git post-commit hook for auto-indexing
-code-vector-cli install-hook --path /path/to/project
+code-vector-cli install-hook
 ```
 
 ## Architecture
@@ -239,9 +261,9 @@ The tool creates separate Qdrant collections for different code granularities:
 - **code_functions**: Individual functions/methods
 - **code_classes**: Classes and their methods
 - **code_files**: Entire files (when no AST available)
-- **documentation**: Markdown and docs (future)
-- **git_history**: Commit messages (future)
-- **conversations**: Chat history (future)
+- **documentation**: Markdown and docs
+- **git_history**: Commit messages and diffs
+- **conversations**: Claude Code chat history
 
 ### Multi-Repo Workspace
 
