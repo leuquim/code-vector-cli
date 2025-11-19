@@ -31,16 +31,11 @@ The project must be indexed first. Check if indexed:
 code-vector-cli stats
 ```
 
-If not indexed or stats show 0 points, initialize:
+If not indexed or stats show 0 points, inform the user they need to initialize:
+- For single git repo: `code-vector-cli init`
+- For workspace with multiple repos: `cd /path/to/workspace && code-vector-cli init`
 
-```bash
-# For single git repo
-code-vector-cli init
-
-# For workspace with multiple repos
-cd /path/to/workspace
-code-vector-cli init
-```
+Always let the user initiate indexing operations.
 
 ## Core Commands
 
