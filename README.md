@@ -5,6 +5,34 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 > **⚠️ AI-Built Tool Disclaimer**
 > This tool was fully built using AI assistants (Claude Code) to serve personal use cases and workflows. While functional and actively used, it may contain bugs or edge cases. Contributions, bug reports, and feedback are welcome via GitHub Issues.
 
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Install Qdrant](#install-qdrant)
+  - [Install Code Vector CLI](#install-code-vector-cli)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+  - [Using OpenAI Embeddings](#using-openai-embeddings-faster-requires-api-key)
+  - [Using Local Embeddings](#using-local-embeddings-free-no-api-key-needed)
+- [Usage](#usage)
+  - [Indexing Commands](#indexing-commands)
+  - [Search Commands](#search-commands)
+  - [Similarity & Context Commands](#similarity--context-commands)
+  - [Documentation & History Search](#documentation--history-search)
+  - [Management Commands](#management-commands)
+- [Architecture](#architecture)
+- [Supported Languages](#supported-languages)
+- [Claude Code Integration](#claude-code-integration)
+  - [Conversation Indexing](#conversation-indexing)
+  - [Claude Code Skill](#claude-code-skill)
+- [Development](#development)
+- [Roadmap](#roadmap)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+- [Support](#support)
+
 ## Features
 
 - **Semantic Code Search**: Find code by meaning, not just keywords
@@ -18,58 +46,6 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 - **Impact Analysis**: Analyze dependencies and find code affected by changes
 - **Context Selection**: AI-powered file selection for specific tasks
 - **Similarity Search**: Find similar code patterns across your codebase
-
-## Claude Code Integration
-
-This tool was designed to work seamlessly with [Claude Code](https://claude.ai/code), Anthropic's AI coding assistant, though it works standalone as well.
-
-### Conversation Indexing
-
-To enable conversation search (index your Claude Code sessions):
-
-1. **Enable conversation tracking** with a hook that saves transcripts to `.claude-transcripts/` in your project
-
-   Add this to your `.claude/settings.json`:
-   ```json
-   {
-     "hooks": {
-       "SessionEnd": {
-         "command": "mkdir -p .claude-transcripts && cat > .claude-transcripts/$(date +%Y%m%d-%H%M%S).jsonl",
-         "input": "transcript"
-       }
-     }
-   }
-   ```
-
-2. **Index conversations** (reads from `{project}/.claude-transcripts/`):
-   ```bash
-   code-vector-cli migrate-conversations
-   ```
-
-3. **Search conversations:**
-   ```bash
-   code-vector-cli search-conversations "deployment issues"
-   ```
-
-This allows you to search through past Claude Code sessions in your project to find solutions, decisions, and context from previous work.
-
-### Claude Code Skill
-
-A Claude Code skill is included in `.claude/skills/code-vector-search/SKILL.md` that provides Claude with direct access to this tool. It includes:
-
-- Automatic triggers for code search scenarios
-- All available commands with examples
-- Best practices and effective search strategies
-- Multiple workflow examples
-- Troubleshooting guide
-
-**Installation:**
-```bash
-# For all projects (global)
-cp -r .claude/skills/code-vector-search ~/.claude/skills/
-
-# Or keep it project-specific (already in this repo)
-```
 
 ## Installation
 
@@ -337,6 +313,58 @@ Currently optimized for:
 - Java
 
 Additional languages can be added by configuring Tree-sitter grammars in `ast_chunker.py`.
+
+## Claude Code Integration
+
+This tool was designed to work seamlessly with [Claude Code](https://claude.ai/code), Anthropic's AI coding assistant, though it works standalone as well.
+
+### Conversation Indexing
+
+To enable conversation search (index your Claude Code sessions):
+
+1. **Enable conversation tracking** with a hook that saves transcripts to `.claude-transcripts/` in your project
+
+   Add this to your `.claude/settings.json`:
+   ```json
+   {
+     "hooks": {
+       "SessionEnd": {
+         "command": "mkdir -p .claude-transcripts && cat > .claude-transcripts/$(date +%Y%m%d-%H%M%S).jsonl",
+         "input": "transcript"
+       }
+     }
+   }
+   ```
+
+2. **Index conversations** (reads from `{project}/.claude-transcripts/`):
+   ```bash
+   code-vector-cli migrate-conversations
+   ```
+
+3. **Search conversations:**
+   ```bash
+   code-vector-cli search-conversations "deployment issues"
+   ```
+
+This allows you to search through past Claude Code sessions in your project to find solutions, decisions, and context from previous work.
+
+### Claude Code Skill
+
+A Claude Code skill is included in `.claude/skills/code-vector-search/SKILL.md` that provides Claude with direct access to this tool. It includes:
+
+- Automatic triggers for code search scenarios
+- All available commands with examples
+- Best practices and effective search strategies
+- Multiple workflow examples
+- Troubleshooting guide
+
+**Installation:**
+```bash
+# For all projects (global)
+cp -r .claude/skills/code-vector-search ~/.claude/skills/
+
+# Or keep it project-specific (already in this repo)
+```
 
 ## Troubleshooting
 
