@@ -350,10 +350,12 @@ This allows you to search through past Claude Code sessions in your project to f
 
 ### Claude Code Skill
 
-A Claude Code skill is included in `.claude/skills/code-vector-search/SKILL.md` that provides Claude with direct access to this tool. It includes:
+A Claude Code skill is included in `.claude/skills/code-vector-search/SKILL.md` that provides Claude with direct access to this tool.
 
-- Automatic triggers for code search scenarios
-- All available commands with examples
+**Features:**
+- YAML frontmatter with skill name, description, and allowed tools
+- Automatic triggers for code search scenarios (model-invoked)
+- All 6 core commands with detailed examples
 - Best practices and effective search strategies
 - Multiple workflow examples
 - Troubleshooting guide
@@ -365,6 +367,8 @@ cp -r .claude/skills/code-vector-search ~/.claude/skills/
 
 # Or keep it project-specific (already in this repo)
 ```
+
+The skill is model-invoked—Claude automatically activates it when users ask questions matching the description (e.g., "find code that handles authentication").
 
 ## Troubleshooting
 

@@ -1,3 +1,9 @@
+---
+name: code-vector-search
+description: Semantic code search using vector embeddings to find code by meaning, locate similar patterns, analyze impact, and search git history or conversations. Use when user asks to find code, locate implementations, understand architecture, check what code handles something, find similar patterns, or search past work.
+allowed-tools: Bash
+---
+
 # Code Vector Search Skill
 
 Use semantic code search via `code-vector-cli` to efficiently find code, understand architecture, and analyze dependencies across indexed codebases.
