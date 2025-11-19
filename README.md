@@ -27,12 +27,31 @@ This tool was designed to work seamlessly with [Claude Code](https://claude.ai/c
 
 To enable conversation search (index your Claude Code sessions):
 
-1. Enable conversation tracking in Claude Code settings
-2. Conversations are stored in `~/.claude/conversations/`
-3. Index them with: `code-vector-cli index-conversations`
-4. Search conversations: `code-vector-cli search-conversations "deployment issues"`
+1. **Enable conversation tracking** with a hook that saves transcripts to `.claude-transcripts/` in your project
 
-This allows you to search through past Claude Code sessions to find solutions, decisions, and context from previous work.
+   Add this to your `.claude/settings.json`:
+   ```json
+   {
+     "hooks": {
+       "SessionEnd": {
+         "command": "mkdir -p .claude-transcripts && cat > .claude-transcripts/$(date +%Y%m%d-%H%M%S).jsonl",
+         "input": "transcript"
+       }
+     }
+   }
+   ```
+
+2. **Index conversations** (reads from `{project}/.claude-transcripts/`):
+   ```bash
+   code-vector-cli migrate-conversations
+   ```
+
+3. **Search conversations:**
+   ```bash
+   code-vector-cli search-conversations "deployment issues"
+   ```
+
+This allows you to search through past Claude Code sessions in your project to find solutions, decisions, and context from previous work.
 
 ### Claude Code Skill
 
@@ -243,7 +262,10 @@ code-vector-cli impact "src/models/user.py"
 # Search documentation
 code-vector-cli search-docs "api setup"
 
-# Search conversation history (requires conversation indexing)
+# Index conversation transcripts (one-time setup)
+code-vector-cli migrate-conversations
+
+# Search conversation history (requires SessionEnd hook + migrate-conversations)
 code-vector-cli search-conversations "deployment issues"
 ```
 

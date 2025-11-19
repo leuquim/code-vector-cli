@@ -97,10 +97,18 @@ code-vector-cli impact "src/models/user.py"
 
 ### 6. Search Conversations
 
-Search past Claude Code sessions (requires conversation indexing).
+Search past Claude Code sessions (requires conversation indexing setup).
+
+**Prerequisites:**
+1. Enable SessionEnd hook to save transcripts to `.claude-transcripts/`
+2. Run `code-vector-cli migrate-conversations` to index them
 
 ```bash
+# Search indexed conversations
 code-vector-cli search-conversations "deployment issues" -n 5
+
+# First-time setup: index conversations
+code-vector-cli migrate-conversations
 ```
 
 ## Best Practices
@@ -170,11 +178,13 @@ code-vector-cli impact "src/routes/api.js"
 ### Workflow 3: "How did we solve this before?"
 
 ```bash
-# Search past conversations
+# Search past conversations (if indexed)
 code-vector-cli search-conversations "database connection pooling"
 
 # Search the actual implementation
 code-vector-cli search "database connection pool implementation"
+
+# Note: Conversations require setup via SessionEnd hook + migrate-conversations
 ```
 
 ## Troubleshooting
