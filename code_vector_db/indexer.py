@@ -71,6 +71,7 @@ class CodebaseIndexer:
 
     def __init__(self, project_path: str):
         self.project_path = Path(project_path).resolve()
+        self.workspace_root = self.project_path  # Save original for multi-repo mode
         self.vector_store = VectorStore(str(self.project_path))
         self.metadata = ProjectMetadata()
         self.ast_chunker = ASTChunker()
@@ -156,7 +157,8 @@ class CodebaseIndexer:
             )
             if result.returncode == 0:
                 return True
-        except:
+        except (subprocess.SubprocessError, subprocess.TimeoutExpired):
+            # Git not available or timeout - fall back to pattern matching
             pass
 
         # Check against default patterns
@@ -371,8 +373,55 @@ class CodebaseIndexer:
         )
         print(f"\n✓ Registered workspace in metadata: {self.project_path}")
 
+    def _filter_changed_files(self, files: List[Path]) -> List[Path]:
+        """Filter files to only those changed since last index"""
+        import hashlib
+
+        # Get last index time from metadata
+        # Always use workspace root, even when temporarily indexing sub-repos
+        last_indexed = self.metadata.get_last_indexed_time(str(self.workspace_root))
+
+        if not last_indexed:
+            # Never indexed before, return all files
+            return files
+
+        changed_files = []
+
+        for file_path in files:
+            try:
+                # Check modification time first (fast)
+                mtime = os.path.getmtime(file_path)
+                if mtime > last_indexed:
+                    # File modified since last index
+                    changed_files.append(file_path)
+                    continue
+
+                # For files with same mtime, check content hash
+                # (catches cases where file was restored to same mtime)
+                content = file_path.read_text(errors='ignore')
+                content_hash = hashlib.md5(content.encode()).hexdigest()
+
+                # Query vector DB to see if this file exists with different hash
+                # This is expensive, so only do it for files with matching mtime
+                # For simplicity, we'll skip this check and rely on mtime
+
+            except Exception:
+                # If we can't check, include it to be safe
+                changed_files.append(file_path)
+
+        return changed_files
+
     def _index_code_files(self, files: List[Path], incremental: bool):
         """Index code files with parallel processing and batched embedding"""
+
+        # Filter to only changed files if incremental
+        if incremental:
+            files = self._filter_changed_files(files)
+            if not files:
+                print("  No files changed since last index")
+                return
+            print(f"  Incremental mode: {len(files)} files changed")
+
         total_chunks = 0
         batch_size = 800  # Increased batch size for better throughput
         # Parsing is lightweight, can use more cores without competing

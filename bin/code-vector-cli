@@ -5,6 +5,7 @@ import sys
 import os
 import argparse
 import json
+import hashlib
 from pathlib import Path
 
 # Add library to path
@@ -81,6 +82,61 @@ def _read_code_snippet(project_path, file_path, start_line, end_line, context_li
         return None
 
 
+def _format_search_result(result, index, args, base_path=None):
+    """Format a single search result for display"""
+    repo_prefix = f"[{result.metadata.get('repo', '')}] " if result.metadata.get('repo') else ""
+    line_range = f"{result.start_line}-{result.end_line}" if result.end_line > result.start_line else str(result.start_line)
+    lang_suffix = f" [{result.language}]" if result.language else ""
+
+    print(f"{index}. [{result.score:.3f}] {repo_prefix}{result.file_path}:{line_range}{lang_suffix}")
+
+    if result.name:
+        print(f"   {result.type}: {result.name}")
+    elif result.type:
+        print(f"   type: {result.type}")
+
+    if hasattr(args, 'show_parent') and args.show_parent and result.parent:
+        print(f"   parent: {result.parent}")
+
+    if hasattr(args, 'show_content') and args.show_content:
+        if base_path is None:
+            base_path = getattr(args, 'workspace_path', args.project_path)
+        snippet = _read_code_snippet(
+            base_path,
+            result.file_path,
+            result.start_line,
+            result.end_line,
+            context_lines=getattr(args, 'context_lines', 3)
+        )
+        if snippet:
+            print(snippet)
+        print()
+
+
+def cmd_search_hybrid(args):
+    """Hybrid search combining semantic + BM25 keyword matching"""
+    query_interface = QueryInterface(args.project_path)
+
+    results = query_interface.search_hybrid(
+        args.query,
+        limit=args.limit,
+        threshold=args.threshold,
+        bm25_weight=args.bm25_weight,
+        semantic_weight=args.semantic_weight
+    )
+
+    if not results:
+        print(f"\nNo results found for: '{args.query}'")
+        print(f"Threshold: {args.threshold}")
+        print("Try lowering threshold with -t 0.1 or -t 0.0 for more results")
+        return
+
+    weights_info = f"(semantic: {args.semantic_weight:.1f}, keyword: {args.bm25_weight:.1f})"
+    print(f"\nFound {len(results)} results {weights_info}:\n")
+    for i, result in enumerate(results, 1):
+        _format_search_result(result, i, args)
+
+
 def cmd_search(args):
     """Search code"""
     query_interface = QueryInterface(args.project_path)
@@ -99,42 +155,7 @@ def cmd_search(args):
 
     print(f"\nFound {len(results)} results (threshold: {args.threshold}):\n")
     for i, result in enumerate(results, 1):
-        # Check if this is a workspace (has repo metadata)
-        repo_prefix = f"[{result.metadata.get('repo', '')}] " if result.metadata.get('repo') else ""
-
-        # Show complete line range
-        line_range = f"{result.start_line}-{result.end_line}" if result.end_line > result.start_line else str(result.start_line)
-
-        # Show language if available
-        lang_suffix = f" [{result.language}]" if result.language else ""
-
-        print(f"{i}. [{result.score:.3f}] {repo_prefix}{result.file_path}:{line_range}{lang_suffix}")
-
-        # Show type and name
-        if result.name:
-            print(f"   {result.type}: {result.name}")
-        elif result.type:
-            print(f"   type: {result.type}")
-
-        # Show parent if requested
-        if args.show_parent and result.parent:
-            print(f"   parent: {result.parent}")
-
-        # Show code snippet if requested
-        if args.show_content:
-            # Use workspace_path if available, otherwise project_path
-            base_path = getattr(args, 'workspace_path', args.project_path)
-            snippet = _read_code_snippet(
-                base_path,
-                result.file_path,
-                result.start_line,
-                result.end_line,
-                context_lines=args.context_lines
-            )
-            if snippet:
-                print(f"\n{snippet}")
-
-        print()
+        _format_search_result(result, i, args)
 
 
 def cmd_similar(args):
@@ -161,38 +182,7 @@ def cmd_similar(args):
     print(f"\nSimilar to {query_type}: '{args.query}'")
     print(f"Found {len(results)} results (threshold: {args.threshold}):\n")
     for i, result in enumerate(results, 1):
-        # Check if this is a workspace (has repo metadata)
-        repo_prefix = f"[{result.metadata.get('repo', '')}] " if result.metadata.get('repo') else ""
-
-        # Show complete line range
-        line_range = f"{result.start_line}-{result.end_line}" if result.end_line > result.start_line else str(result.start_line)
-
-        # Show language if available
-        lang_suffix = f" [{result.language}]" if result.language else ""
-
-        print(f"{i}. [{result.score:.3f}] {repo_prefix}{result.file_path}:{line_range}{lang_suffix}")
-
-        # Show type and name
-        if result.name:
-            print(f"   {result.type}: {result.name}")
-        elif result.type:
-            print(f"   type: {result.type}")
-
-        # Show code snippet if requested
-        if hasattr(args, 'show_content') and args.show_content:
-            # Use workspace_path if available, otherwise project_path
-            base_path = getattr(args, 'workspace_path', args.project_path)
-            snippet = _read_code_snippet(
-                base_path,
-                result.file_path,
-                result.start_line,
-                result.end_line,
-                context_lines=getattr(args, 'context_lines', 3)
-            )
-            if snippet:
-                print(f"\n{snippet}")
-
-        print()
+        _format_search_result(result, i, args)
 
 
 def cmd_context(args):
@@ -345,6 +335,231 @@ def cmd_install_hook(args):
     print("  Vector database will auto-update on commits")
 
 
+def cmd_index_git(args):
+    """Index git commit history into vector database"""
+    from code_vector_db.embeddings import get_text_embedder
+    from code_vector_db.vector_store import VectorStore
+    from code_vector_db.metadata import ProjectMetadata
+    import subprocess
+
+    vector_store = VectorStore(args.project_path)
+    text_embedder = get_text_embedder()
+    metadata = ProjectMetadata()
+
+    # Check if incremental mode
+    incremental = getattr(args, 'incremental', False)
+
+    # Check if path is a git repo or workspace
+    project_path = Path(args.project_path)
+    git_repos = []
+
+    # Check if it's a direct git repo
+    if (project_path / ".git").exists():
+        git_repos.append(("", project_path))
+    else:
+        # Check for multi-repo workspace
+        for item in project_path.iterdir():
+            if item.is_dir() and (item / ".git").exists():
+                git_repos.append((item.name, item))
+
+    if not git_repos:
+        print("No git repositories found")
+        return
+
+    mode_str = " (incremental)" if incremental else ""
+    print(f"Found {len(git_repos)} git repositories{mode_str}", flush=True)
+
+    # First pass: count commits per repo
+    print("\nAnalyzing repositories...", flush=True)
+    repo_commit_counts = []
+    for repo_name, repo_path in git_repos:
+        try:
+            count_cmd = [
+                "git", "-C", str(repo_path), "rev-list",
+                "--count", "--no-merges", "HEAD"
+            ]
+            count_result = subprocess.run(count_cmd, capture_output=True, text=True, check=True)
+            total_available = int(count_result.stdout.strip())
+
+            if hasattr(args, 'limit') and args.limit:
+                to_index = min(total_available, args.limit)
+                repo_commit_counts.append((repo_name or "main", total_available, to_index))
+                print(f"  {repo_name or 'main'}: {to_index:,} commits to index ({total_available:,} total)", flush=True)
+            else:
+                to_index = total_available
+                repo_commit_counts.append((repo_name or "main", total_available, to_index))
+                print(f"  {repo_name or 'main'}: {to_index:,} commits to index", flush=True)
+        except subprocess.CalledProcessError:
+            continue
+
+    total_commits = 0
+    points = []
+
+    for repo_name, repo_path in git_repos:
+        repo_label = f" [{repo_name}]" if repo_name else ""
+        print(f"\nIndexing git history{repo_label}...", flush=True)
+
+        try:
+            # Build git log command
+            cmd = [
+                "git", "-C", str(repo_path), "log",
+                "--format=%H|%an|%ae|%at|%s",
+                "--no-merges"
+            ]
+
+            # Check for incremental mode
+            if incremental:
+                last_commit = metadata.get_last_indexed_commit(str(project_path), repo_name or "")
+                if last_commit:
+                    # Get commits since last indexed commit
+                    cmd.extend([f"{last_commit}..HEAD"])
+                    print(f"  Incremental: indexing commits since {last_commit[:8]}", flush=True)
+                else:
+                    # No previous index - index all commits
+                    if hasattr(args, 'limit') and args.limit:
+                        cmd.extend(["-n", str(args.limit)])
+                        print(f"  No previous index found, indexing last {args.limit} commits", flush=True)
+                    else:
+                        print(f"  No previous index found, indexing all commits", flush=True)
+            else:
+                # Full index - index all commits (or use limit if specified)
+                if hasattr(args, 'limit') and args.limit:
+                    cmd.extend(["-n", str(args.limit)])
+                    print(f"  Indexing last {args.limit} commits", flush=True)
+                else:
+                    print(f"  Indexing all commits", flush=True)
+
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+            # If no new commits in incremental mode
+            if incremental and not result.stdout.strip():
+                print(f"  No new commits since last index", flush=True)
+                continue
+
+            latest_commit_hash = None
+            commit_count = 0
+
+            # Parse all commits first
+            commits_data = []
+            for line in result.stdout.strip().split('\n'):
+                if not line:
+                    continue
+
+                parts = line.split('|', 4)
+                if len(parts) != 5:
+                    continue
+
+                commit_hash, author, email, timestamp, subject = parts
+
+                # Track the first (latest) commit
+                if latest_commit_hash is None:
+                    latest_commit_hash = commit_hash
+
+                commits_data.append({
+                    'commit_hash': commit_hash,
+                    'author': author,
+                    'email': email,
+                    'timestamp': timestamp,
+                    'subject': subject
+                })
+
+            # Batch embed all commits at once (much faster!)
+            if commits_data:
+                texts_to_embed = [
+                    f"{c['subject']}\n\nAuthor: {c['author']}\nCommit: {c['commit_hash'][:8]}"
+                    for c in commits_data
+                ]
+
+                print(f"  Generating embeddings for {len(commits_data)} commits...", flush=True)
+                embeddings = text_embedder.embed(texts_to_embed)
+
+                # Create points with embeddings
+                for i, commit_data in enumerate(commits_data):
+                    commit_hash = commit_data['commit_hash']
+                    commit_id = hashlib.md5(commit_hash.encode()).hexdigest()
+
+                    points.append({
+                        "id": commit_id,
+                        "vector": embeddings[i],
+                        "metadata": {
+                            "file_path": f"git:{commit_hash[:8]}",
+                            "type": "git_commit",
+                            "role": "commit",
+                            "content": commit_data['subject'][:500],
+                            "session_id": commit_hash,
+                            "timestamp": commit_data['timestamp'],
+                            "model": commit_data['author'],
+                            "start_line": 0,
+                            "end_line": 0,
+                            "name": commit_hash[:8],
+                            "parent": "",
+                            "language": "",
+                            "content_hash": commit_hash,
+                            "repo": repo_name
+                        }
+                    })
+
+                    total_commits += 1
+                    commit_count += 1
+
+                    # Batch insert every 100 commits
+                    if len(points) >= 100:
+                        print(f"  Indexed {total_commits} commits...", flush=True)
+                        vector_store.upsert_points(VectorStore.GIT_HISTORY, points)
+                        points = []
+
+            # Store the latest commit hash for incremental updates
+            if latest_commit_hash and commit_count > 0:
+                metadata.set_last_indexed_commit(str(project_path), repo_name or "", latest_commit_hash)
+                print(f"  ✓ Indexed {commit_count} commits (latest: {latest_commit_hash[:8]})", flush=True)
+
+        except subprocess.CalledProcessError as e:
+            print(f"  Error reading git history: {e}")
+
+    # Insert remaining points
+    if points:
+        vector_store.upsert_points(VectorStore.GIT_HISTORY, points)
+
+    print(f"\n✓ Indexed {total_commits} git commits", flush=True)
+    print(f"  Use code-vector-cli search-git '<query>' to search commits", flush=True)
+
+
+def cmd_search_git(args):
+    """Search git commit history"""
+    query_interface = QueryInterface(args.project_path)
+
+    from code_vector_db.embeddings import get_text_embedder
+    from code_vector_db.vector_store import VectorStore
+
+    text_embedder = get_text_embedder()
+    vector_store = VectorStore(args.project_path)
+
+    query_vector = text_embedder.embed(args.query)[0]
+
+    results = vector_store.search(
+        collection=VectorStore.GIT_HISTORY,
+        query_vector=query_vector,
+        limit=args.limit,
+        score_threshold=args.threshold
+    )
+
+    if not results:
+        print(f"\nNo git commits found for: '{args.query}'")
+        print(f"Threshold: {args.threshold}")
+        print("Try lowering threshold with -t 0.1 or run: code-vector-cli index-git")
+        return
+
+    print(f"\nFound {len(results)} git commits (threshold: {args.threshold}):\n")
+    for i, result in enumerate(results, 1):
+        metadata = result["metadata"]
+        repo_prefix = f"[{metadata.get('repo', '')}] " if metadata.get('repo') else ""
+
+        print(f"{i}. [{result['score']:.3f}] {repo_prefix}{metadata.get('name', 'unknown')}")
+        print(f"   {metadata.get('content', '')}")
+        print(f"   Author: {metadata.get('model', 'unknown')}")
+        print()
+
+
 def cmd_migrate_conversations(args):
     """Migrate conversation transcripts to vector database"""
     from code_vector_db.embeddings import get_text_embedder
@@ -377,38 +592,51 @@ def cmd_migrate_conversations(args):
                     if not line.strip():
                         continue
 
-                    message = json.loads(line)
+                    record = json.loads(line)
+
+                    # Handle Claude Code transcript format
+                    message = record.get("message", {})
                     role = message.get("role", "")
                     content = message.get("content", "")
 
                     if not content or role not in ["user", "assistant"]:
                         continue
 
-                    # Extract text content
+                    # Extract text content (skip tool_use and tool_result blocks)
                     text_content = ""
                     if isinstance(content, str):
                         text_content = content
                     elif isinstance(content, list):
-                        text_content = " ".join(
-                            block.get("text", "") for block in content
-                            if isinstance(block, dict) and "text" in block
-                        )
+                        text_blocks = []
+                        for block in content:
+                            if isinstance(block, dict):
+                                # Only process text blocks, skip tool_use and tool_result
+                                if block.get("type") == "text" and "text" in block:
+                                    text_blocks.append(block["text"])
+                        text_content = " ".join(text_blocks)
 
                     if not text_content or len(text_content) < 10:
+                        # Skip short messages silently
                         continue
 
                     # Generate embedding
                     embedding = text_embedder.embed(text_content)[0]
 
+                    # Generate unique ID for this conversation message
+                    message_id = hashlib.md5(
+                        f"{transcript_file.stem}:{record.get('uuid', '')}:{total_messages}".encode()
+                    ).hexdigest()
+
                     points.append({
+                        "id": message_id,  # Unique ID per message
                         "vector": embedding,
                         "metadata": {
                             "file_path": str(transcript_file.name),
                             "type": "conversation",
                             "role": role,
                             "content": text_content[:500],  # Store snippet
-                            "session_id": transcript_file.stem,
-                            "timestamp": message.get("timestamp", ""),
+                            "session_id": record.get("sessionId", transcript_file.stem),
+                            "timestamp": record.get("timestamp", ""),
                             "model": message.get("model", ""),
                             "start_line": 0,
                             "end_line": 0,
@@ -423,19 +651,22 @@ def cmd_migrate_conversations(args):
 
                     # Batch insert every 100 messages
                     if len(points) >= 100:
+                        print(f"  Upserting batch of {len(points)} messages...")
                         vector_store.upsert_points(VectorStore.CONVERSATIONS, points)
                         points = []
-                        print(f"  Migrated {total_messages} messages...")
+                        print(f"  ✓ Migrated {total_messages} messages total")
 
         except Exception as e:
             print(f"  Error processing {transcript_file}: {e}")
 
     # Insert remaining points
     if points:
+        print(f"  Inserting final batch of {len(points)} messages...")
         vector_store.upsert_points(VectorStore.CONVERSATIONS, points)
 
     print(f"\n✓ Migrated {total_messages} conversation messages")
-    print(f"  Use /v-conversation to search conversations")
+    print(f"  Use code-vector-cli search-conversations '<query>' to search")
+
 
 
 def cmd_list_projects(args):
@@ -615,6 +846,17 @@ def main():
     search_parser.add_argument("--show-content", action="store_true", help="Show code snippets")
     search_parser.add_argument("-C", "--context-lines", type=int, default=3, help="Context lines around code snippets (default: 3)")
 
+    # hybrid search command
+    hybrid_parser = subparsers.add_parser("search-hybrid", help="Hybrid search (semantic + keyword BM25)")
+    hybrid_parser.add_argument("query", help="Search query")
+    hybrid_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
+    hybrid_parser.add_argument("-t", "--threshold", type=float, default=0.3, help="Score threshold")
+    hybrid_parser.add_argument("--show-parent", action="store_true", help="Show parent class/module")
+    hybrid_parser.add_argument("--show-content", action="store_true", help="Show code snippets")
+    hybrid_parser.add_argument("-C", "--context-lines", type=int, default=3, help="Context lines around code snippets (default: 3)")
+    hybrid_parser.add_argument("--bm25-weight", type=float, default=0.3, help="BM25 keyword weight (default: 0.3)")
+    hybrid_parser.add_argument("--semantic-weight", type=float, default=0.7, help="Semantic similarity weight (default: 0.7)")
+
     # similar command
     similar_parser = subparsers.add_parser("similar", help="Find similar code")
     similar_parser.add_argument("query", help="File path OR semantic query")
@@ -646,6 +888,17 @@ def main():
     conv_parser.add_argument("query", help="Search query")
     conv_parser.add_argument("-n", "--limit", type=int, default=5, help="Number of results")
     conv_parser.add_argument("-t", "--threshold", type=float, default=0.3, help="Score threshold")
+
+    # index-git command
+    git_index_parser = subparsers.add_parser("index-git", help="Index git commit history")
+    git_index_parser.add_argument("-n", "--limit", type=int, default=None, help="Max commits to index per repo (default: all commits)")
+    git_index_parser.add_argument("--incremental", action="store_true", help="Only index new commits since last run")
+
+    # search-git command
+    git_search_parser = subparsers.add_parser("search-git", help="Search git commits")
+    git_search_parser.add_argument("query", help="Search query")
+    git_search_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
+    git_search_parser.add_argument("-t", "--threshold", type=float, default=0.3, help="Score threshold")
 
     # stats command
     subparsers.add_parser("stats", help="Show statistics")
@@ -686,11 +939,14 @@ def main():
         "index": cmd_index,
         "reindex-file": cmd_reindex_file,
         "search": cmd_search,
+        "search-hybrid": cmd_search_hybrid,
         "similar": cmd_similar,
         "context": cmd_context,
         "impact": cmd_impact,
         "search-docs": cmd_search_docs,
         "search-conversations": cmd_search_conversations,
+        "index-git": cmd_index_git,
+        "search-git": cmd_search_git,
         "stats": cmd_stats,
         "install-hook": cmd_install_hook,
         "migrate-conversations": cmd_migrate_conversations,

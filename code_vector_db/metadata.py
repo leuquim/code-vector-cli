@@ -23,7 +23,9 @@ class ProjectMetadata:
             try:
                 with open(self.REGISTRY_PATH) as f:
                     self.registry = json.load(f)
-            except:
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"Warning: Failed to load registry (corrupted?): {e}")
+                print(f"  Creating new registry at {self.REGISTRY_PATH}")
                 self.registry = {}
         else:
             self.registry = {}
@@ -93,6 +95,69 @@ class ProjectMetadata:
         if project_id in self.registry:
             del self.registry[project_id]
             self._save_registry()
+
+    def get_last_indexed_time(self, project_path: str) -> Optional[float]:
+        """Get timestamp of last indexing for a project
+
+        Returns:
+            Unix timestamp (seconds since epoch) or None if never indexed
+        """
+        info = self.get_project_info(project_path)
+        if not info:
+            return None
+
+        # Get last_updated timestamp (ISO format)
+        timestamp_str = info.get("last_updated")
+        if not timestamp_str:
+            return None
+
+        try:
+            # Parse ISO format: "2025-11-18T22:30:00.123456Z"
+            # The 'Z' indicates UTC timezone
+            if timestamp_str.endswith('Z'):
+                timestamp_str = timestamp_str[:-1] + '+00:00'
+
+            dt = datetime.fromisoformat(timestamp_str)
+
+            # Convert to Unix timestamp
+            return dt.timestamp()
+        except Exception as e:
+            return None
+
+    def get_last_indexed_commit(self, project_path: str, repo_name: str = "") -> Optional[str]:
+        """Get the last indexed commit hash for a repository
+
+        Args:
+            project_path: Project or workspace path
+            repo_name: Repository name (for multi-repo workspaces)
+
+        Returns:
+            Commit hash or None if never indexed
+        """
+        info = self.get_project_info(project_path)
+        if not info:
+            return None
+
+        git_commits = info.get("git_commits", {})
+        return git_commits.get(repo_name or "main")
+
+    def set_last_indexed_commit(self, project_path: str, repo_name: str, commit_hash: str):
+        """Store the last indexed commit hash for a repository
+
+        Args:
+            project_path: Project or workspace path
+            repo_name: Repository name
+            commit_hash: Latest commit hash indexed
+        """
+        project_id = self.get_project_id(project_path)
+        if project_id not in self.registry:
+            return
+
+        if "git_commits" not in self.registry[project_id]:
+            self.registry[project_id]["git_commits"] = {}
+
+        self.registry[project_id]["git_commits"][repo_name or "main"] = commit_hash
+        self._save_registry()
 
     def cleanup_missing_projects(self) -> List[str]:
         """Remove projects whose paths no longer exist"""

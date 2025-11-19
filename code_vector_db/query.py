@@ -144,7 +144,8 @@ class QueryInterface:
         # Read file content
         try:
             content = path.read_text(errors='ignore')
-        except:
+        except (IOError, OSError) as e:
+            print(f"Warning: Could not read file {file_path}: {e}")
             return []
 
         # Generate embedding
@@ -277,8 +278,9 @@ class QueryInterface:
                         if sim.file_path not in seen_paths:
                             indirect_results.append(sim)
                             seen_paths.add(sim.file_path)
-                except:
-                    pass
+                except Exception:
+                    # Skip files that can't be analyzed
+                    continue
 
         # Sort indirect results by score
         indirect_results.sort(key=lambda x: x.score, reverse=True)
@@ -288,6 +290,65 @@ class QueryInterface:
             "indirect": indirect_results[:20],
             "query_type": "file" if is_file else "semantic"
         }
+
+    def search_hybrid(
+        self,
+        query: str,
+        limit: int = 10,
+        threshold: float = 0.3,
+        bm25_weight: float = 0.3,
+        semantic_weight: float = 0.7
+    ) -> List[SearchResult]:
+        """Hybrid search combining BM25 keyword matching with semantic search
+
+        Args:
+            query: Search query
+            limit: Number of results to return
+            threshold: Minimum semantic similarity threshold
+            bm25_weight: Weight for BM25 scores (0-1)
+            semantic_weight: Weight for semantic scores (0-1)
+        """
+        from rank_bm25 import BM25Okapi
+        import numpy as np
+
+        # Get semantic results (broader set for re-ranking)
+        semantic_results = self.search_code(query, limit=limit * 3, threshold=max(0.1, threshold - 0.2))
+
+        if not semantic_results:
+            return []
+
+        # Build BM25 index from semantic results
+        corpus = []
+        for result in semantic_results:
+            # Combine name, type, and file path for keyword matching
+            doc_text = f"{result.name} {result.type} {result.file_path}"
+            corpus.append(doc_text.lower().split())
+
+        bm25 = BM25Okapi(corpus)
+        query_tokens = query.lower().split()
+        bm25_scores = bm25.get_scores(query_tokens)
+
+        # Normalize scores to 0-1 range
+        max_bm25 = max(bm25_scores) if max(bm25_scores) > 0 else 1
+        bm25_normalized = bm25_scores / max_bm25
+
+        # Combine scores
+        combined_results = []
+        for i, result in enumerate(semantic_results):
+            combined_score = (
+                semantic_weight * result.score +
+                bm25_weight * bm25_normalized[i]
+            )
+
+            # Create new result with combined score
+            combined_result = SearchResult(combined_score, result.metadata)
+            combined_results.append(combined_result)
+
+        # Sort by combined score and apply threshold
+        combined_results.sort(key=lambda x: x.score, reverse=True)
+        filtered_results = [r for r in combined_results if r.score >= threshold]
+
+        return filtered_results[:limit]
 
     def get_stats(self) -> Dict[str, Any]:
         """Get vector database statistics"""

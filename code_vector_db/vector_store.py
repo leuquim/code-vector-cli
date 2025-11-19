@@ -82,7 +82,7 @@ class VectorStore:
         try:
             self.client.get_collection(name)
             print(f"Collection {name} already exists")
-        except:
+        except Exception:
             from qdrant_client.models import OptimizersConfigDiff
 
             self.client.create_collection(
@@ -116,8 +116,8 @@ class VectorStore:
             try:
                 self.client.delete_collection(self._collection_name(collection))
                 print(f"✓ Deleted collection: {collection}")
-            except:
-                pass
+            except Exception as e:
+                print(f"  Collection {collection} does not exist or already deleted")
 
     def upsert_points(
         self,
@@ -243,7 +243,8 @@ class VectorStore:
                     "points_count": info.points_count,
                     "vectors_count": info.vectors_count,
                 }
-            except:
+            except Exception:
+                # Collection doesn't exist yet
                 stats["collections"][collection] = {
                     "points_count": 0,
                     "vectors_count": 0,
