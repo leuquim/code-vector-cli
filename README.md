@@ -36,7 +36,21 @@ This allows you to search through past Claude Code sessions to find solutions, d
 
 ### Claude Code Skill
 
-A Claude Code skill is included in `.claude/skills/vector-search.md` that provides Claude with direct access to this tool. Copy it to your project's `.claude/skills/` directory or your global `~/.claude/skills/` for all projects.
+A Claude Code skill is included in `.claude/skills/code-vector-search/SKILL.md` that provides Claude with direct access to this tool. It includes:
+
+- Automatic triggers for code search scenarios
+- All available commands with examples
+- Best practices and effective search strategies
+- Multiple workflow examples
+- Troubleshooting guide
+
+**Installation:**
+```bash
+# For all projects (global)
+cp -r .claude/skills/code-vector-search ~/.claude/skills/
+
+# Or keep it project-specific (already in this repo)
+```
 
 ## Installation
 
