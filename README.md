@@ -5,12 +5,15 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 ## Features
 
 - **Semantic Code Search**: Find code by meaning, not just keywords
+- **Incremental Indexing**: Smart file change detection - only reindex modified files
 - **Multi-Repository Support**: Index entire workspaces with multiple projects
 - **AST-Aware Chunking**: Intelligently splits code at function/class boundaries using Tree-sitter
 - **Fast Local or Cloud Embeddings**: Choose between local models (CodeT5+, mpnet) or OpenAI embeddings
 - **Qdrant Vector Database**: High-performance vector storage with collections for functions, classes, and files
-- **Incremental Indexing**: Update only changed files (coming soon)
 - **Cross-Repo Search**: Search across all indexed repositories simultaneously
+- **Impact Analysis**: Analyze dependencies and find code affected by changes
+- **Context Selection**: AI-powered file selection for specific tasks
+- **Similarity Search**: Find similar code patterns across your codebase
 
 ## Installation
 
@@ -32,16 +35,29 @@ docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage qd
 
 ### Install Code Vector CLI
 
+#### Development Installation (Recommended)
+
+For active development with immediate code changes:
+
 ```bash
 # Clone the repository
 git clone https://github.com/leuquim/code-vector-cli.git
 cd code-vector-cli
 
-# Install with pip
+# Install in editable/development mode
 pip install -e .
+```
 
-# Or install from PyPI (once published)
+With editable mode, any changes you make to the code take effect immediately without reinstalling.
+
+#### Standard Installation
+
+```bash
+# Install from PyPI (once published)
 pip install code-vector-cli
+
+# Or install directly from GitHub
+pip install git+https://github.com/leuquim/code-vector-cli.git
 ```
 
 ## Quick Start
@@ -116,49 +132,92 @@ QDRANT_PORT=6333
 
 ## Usage
 
+All commands support the `--path` flag to specify the project directory. If omitted, uses current directory.
+
 ### Indexing Commands
 
 ```bash
-# Index entire workspace
-code-vector-cli index /path/to/workspace
+# Initialize and index a new project
+code-vector-cli init --path /path/to/project
 
-# Reindex specific repository in multi-repo workspace
-code-vector-cli index /path/to/workspace --repo frontend
+# Index or update existing index
+code-vector-cli index --path /path/to/project
 
-# Force reindex (delete and recreate)
-code-vector-cli delete /path/to/workspace --force
-code-vector-cli index /path/to/workspace
+# Incremental indexing (only changed files)
+code-vector-cli index --path /path/to/project --incremental
+
+# Index specific repository in multi-repo workspace
+code-vector-cli index --path /path/to/workspace --repo frontend
+
+# Reindex a single file
+code-vector-cli reindex-file --path /path/to/project /relative/path/to/file.py
 ```
 
 ### Search Commands
 
 ```bash
-# Basic search
-code-vector-cli search /path/to/project "query string"
+# Semantic search - find code by meaning
+code-vector-cli search --path /path/to/project "authentication logic"
 
-# Search specific collection
-code-vector-cli search /path/to/project "query" --collection functions
-code-vector-cli search /path/to/project "query" --collection classes
-code-vector-cli search /path/to/project "query" --collection files
+# Adjust result count and score threshold
+code-vector-cli search --path /path/to/project "error handling" --limit 10 --threshold 0.3
 
-# Limit results
-code-vector-cli search /path/to/project "query" --limit 10
+# Show code snippets in results
+code-vector-cli search --path /path/to/project "database queries" --show-content
 
-# Filter by file extension (multi-repo only)
-code-vector-cli search /path/to/workspace "query" --file-ext .py
+# Show parent class/module information
+code-vector-cli search --path /path/to/project "validation" --show-parent
+
+# Adjust context lines when showing content
+code-vector-cli search --path /path/to/project "api endpoints" --show-content --context-lines 5
+```
+
+### Similarity & Context Commands
+
+```bash
+# Find similar code to a specific file
+code-vector-cli similar --path /path/to/project "src/utils/auth.py" --limit 5
+
+# Find similar code by semantic description
+code-vector-cli similar --path /path/to/project "rate limiting middleware"
+
+# Get relevant context for a task (AI-powered file selection)
+code-vector-cli context --path /path/to/project "fix authentication bug"
+
+# Output context as JSON for tool integration
+code-vector-cli context --path /path/to/project "add user permissions" --json
+
+# Analyze impact of changes to a file
+code-vector-cli impact --path /path/to/project "src/models/user.py"
+```
+
+### Documentation & History Search
+
+```bash
+# Search documentation
+code-vector-cli search-docs --path /path/to/project "api setup"
+
+# Search conversation history
+code-vector-cli search-conversations --path /path/to/project "deployment issues"
 ```
 
 ### Management Commands
 
 ```bash
 # View index statistics
-code-vector-cli stats /path/to/project
+code-vector-cli stats --path /path/to/project
 
 # List all indexed projects
-code-vector-cli list
+code-vector-cli list-projects
 
 # Delete index for a project
-code-vector-cli delete /path/to/project --force
+code-vector-cli delete --path /path/to/project --force
+
+# Clean up metadata for missing projects
+code-vector-cli cleanup-metadata
+
+# Install git post-commit hook for auto-indexing
+code-vector-cli install-hook --path /path/to/project
 ```
 
 ## Architecture
@@ -291,14 +350,17 @@ Contributions welcome! Please:
 
 ## Roadmap
 
-- [ ] Incremental indexing (only reindex changed files)
+- [x] Incremental indexing (only reindex changed files) ✅
+- [x] Impact analysis (dependency tracking) ✅
+- [x] Context selection for tasks ✅
+- [x] Similarity search ✅
+- [ ] Hybrid search (vector + BM25 keyword) - In progress
 - [ ] Support for documentation (Markdown, RST)
 - [ ] Git history indexing (commit messages, diffs)
 - [ ] Conversation history indexing (chat logs)
 - [ ] VSCode extension
 - [ ] Language server protocol (LSP) integration
 - [ ] More language support (Ruby, C++, C#)
-- [ ] Hybrid search (vector + keyword)
 
 ## License
 
