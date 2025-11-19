@@ -5,6 +5,7 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 ## Features
 
 - **Semantic Code Search**: Find code by meaning, not just keywords
+- **Hybrid Search**: Combine semantic understanding with BM25 keyword matching for best results
 - **Incremental Indexing**: Smart file change detection - only reindex modified files
 - **Multi-Repository Support**: Index entire workspaces with multiple projects
 - **AST-Aware Chunking**: Intelligently splits code at function/class boundaries using Tree-sitter
@@ -170,6 +171,15 @@ code-vector-cli search --path /path/to/project "validation" --show-parent
 
 # Adjust context lines when showing content
 code-vector-cli search --path /path/to/project "api endpoints" --show-content --context-lines 5
+
+# Hybrid search - combine semantic understanding with keyword matching
+code-vector-cli search-hybrid --path /path/to/project "login user authentication"
+
+# Adjust semantic vs keyword weights (defaults: semantic=0.7, keyword=0.3)
+code-vector-cli search-hybrid --path /path/to/project "API rate limit" --semantic-weight 0.5 --bm25-weight 0.5
+
+# Use hybrid search with more keyword focus for specific terms
+code-vector-cli search-hybrid --path /path/to/project "getUserById" --semantic-weight 0.3 --bm25-weight 0.7
 ```
 
 ### Similarity & Context Commands
@@ -354,7 +364,7 @@ Contributions welcome! Please:
 - [x] Impact analysis (dependency tracking) ✅
 - [x] Context selection for tasks ✅
 - [x] Similarity search ✅
-- [ ] Hybrid search (vector + BM25 keyword) - In progress
+- [x] Hybrid search (vector + BM25 keyword) ✅
 - [ ] Support for documentation (Markdown, RST)
 - [ ] Git history indexing (commit messages, diffs)
 - [ ] Conversation history indexing (chat logs)

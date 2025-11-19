@@ -78,6 +78,61 @@ def _read_code_snippet(project_path, file_path, start_line, end_line, context_li
         return None
 
 
+def _format_search_result(result, index, args, base_path=None):
+    """Format a single search result for display"""
+    repo_prefix = f"[{result.metadata.get('repo', '')}] " if result.metadata.get('repo') else ""
+    line_range = f"{result.start_line}-{result.end_line}" if result.end_line > result.start_line else str(result.start_line)
+    lang_suffix = f" [{result.language}]" if result.language else ""
+
+    print(f"{index}. [{result.score:.3f}] {repo_prefix}{result.file_path}:{line_range}{lang_suffix}")
+
+    if result.name:
+        print(f"   {result.type}: {result.name}")
+    elif result.type:
+        print(f"   type: {result.type}")
+
+    if hasattr(args, 'show_parent') and args.show_parent and result.parent:
+        print(f"   parent: {result.parent}")
+
+    if hasattr(args, 'show_content') and args.show_content:
+        if base_path is None:
+            base_path = getattr(args, 'workspace_path', args.project_path)
+        snippet = _read_code_snippet(
+            base_path,
+            result.file_path,
+            result.start_line,
+            result.end_line,
+            context_lines=getattr(args, 'context_lines', 3)
+        )
+        if snippet:
+            print(snippet)
+        print()
+
+
+def cmd_search_hybrid(args):
+    """Hybrid search combining semantic + BM25 keyword matching"""
+    query_interface = QueryInterface(args.project_path)
+
+    results = query_interface.search_hybrid(
+        args.query,
+        limit=args.limit,
+        threshold=args.threshold,
+        bm25_weight=args.bm25_weight,
+        semantic_weight=args.semantic_weight
+    )
+
+    if not results:
+        print(f"\nNo results found for: '{args.query}'")
+        print(f"Threshold: {args.threshold}")
+        print("Try lowering threshold with -t 0.1 or -t 0.0 for more results")
+        return
+
+    weights_info = f"(semantic: {args.semantic_weight:.1f}, keyword: {args.bm25_weight:.1f})"
+    print(f"\nFound {len(results)} results {weights_info}:\n")
+    for i, result in enumerate(results, 1):
+        _format_search_result(result, i, args)
+
+
 def cmd_search(args):
     """Search code"""
     query_interface = QueryInterface(args.project_path)
@@ -96,42 +151,7 @@ def cmd_search(args):
 
     print(f"\nFound {len(results)} results (threshold: {args.threshold}):\n")
     for i, result in enumerate(results, 1):
-        # Check if this is a workspace (has repo metadata)
-        repo_prefix = f"[{result.metadata.get('repo', '')}] " if result.metadata.get('repo') else ""
-
-        # Show complete line range
-        line_range = f"{result.start_line}-{result.end_line}" if result.end_line > result.start_line else str(result.start_line)
-
-        # Show language if available
-        lang_suffix = f" [{result.language}]" if result.language else ""
-
-        print(f"{i}. [{result.score:.3f}] {repo_prefix}{result.file_path}:{line_range}{lang_suffix}")
-
-        # Show type and name
-        if result.name:
-            print(f"   {result.type}: {result.name}")
-        elif result.type:
-            print(f"   type: {result.type}")
-
-        # Show parent if requested
-        if args.show_parent and result.parent:
-            print(f"   parent: {result.parent}")
-
-        # Show code snippet if requested
-        if args.show_content:
-            # Use workspace_path if available, otherwise project_path
-            base_path = getattr(args, 'workspace_path', args.project_path)
-            snippet = _read_code_snippet(
-                base_path,
-                result.file_path,
-                result.start_line,
-                result.end_line,
-                context_lines=args.context_lines
-            )
-            if snippet:
-                print(f"\n{snippet}")
-
-        print()
+        _format_search_result(result, i, args)
 
 
 def cmd_similar(args):
@@ -610,6 +630,17 @@ def main():
     search_parser.add_argument("--show-content", action="store_true", help="Show code snippets")
     search_parser.add_argument("-C", "--context-lines", type=int, default=3, help="Context lines (default: 3)")
 
+    # search-hybrid command
+    hybrid_parser = subparsers.add_parser("search-hybrid", help="Hybrid search (semantic + keyword BM25)")
+    hybrid_parser.add_argument("query", help="Search query")
+    hybrid_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
+    hybrid_parser.add_argument("-t", "--threshold", type=float, default=0.3, help="Score threshold")
+    hybrid_parser.add_argument("--show-parent", action="store_true", help="Show parent class/module")
+    hybrid_parser.add_argument("--show-content", action="store_true", help="Show code snippets")
+    hybrid_parser.add_argument("-C", "--context-lines", type=int, default=3, help="Context lines around code snippets (default: 3)")
+    hybrid_parser.add_argument("--bm25-weight", type=float, default=0.3, help="BM25 keyword weight (default: 0.3)")
+    hybrid_parser.add_argument("--semantic-weight", type=float, default=0.7, help="Semantic similarity weight (default: 0.7)")
+
     # similar command
     similar_parser = subparsers.add_parser("similar", help="Find similar code")
     similar_parser.add_argument("query", help="File path OR semantic query")
@@ -681,6 +712,7 @@ def main():
         "index": cmd_index,
         "reindex-file": cmd_reindex_file,
         "search": cmd_search,
+        "search-hybrid": cmd_search_hybrid,
         "similar": cmd_similar,
         "context": cmd_context,
         "impact": cmd_impact,
