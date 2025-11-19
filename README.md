@@ -355,10 +355,13 @@ A Claude Code skill is included in `.claude/skills/code-vector-search/SKILL.md` 
 **Features:**
 - YAML frontmatter with skill name, description, and allowed tools
 - Automatic triggers for code search scenarios (model-invoked)
-- All 6 core commands with detailed examples
-- Best practices and effective search strategies
-- Multiple workflow examples
-- Troubleshooting guide
+- 8 core commands: search, search-hybrid, similar, context, impact, search-git, search-conversations, search-docs
+- Maintenance commands: indexing, stats, cleanup
+- 4 workflow patterns: new feature, refactoring, understanding code, daily development
+- Performance optimization tips
+- Advanced usage examples
+- Best practices for Claude execution
+- Comprehensive troubleshooting guide
 
 **Installation:**
 ```bash
