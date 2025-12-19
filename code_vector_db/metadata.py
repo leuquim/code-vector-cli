@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import hashlib
+from code_vector_db import normalize_path_for_id
 
 
 class ProjectMetadata:
@@ -38,9 +39,9 @@ class ProjectMetadata:
 
     @staticmethod
     def get_project_id(project_path: str) -> str:
-        """Calculate project ID from path"""
-        abs_path = os.path.abspath(project_path)
-        return hashlib.md5(abs_path.encode()).hexdigest()[:12]
+        """Calculate project ID from normalized path (cross-platform compatible)"""
+        normalized = normalize_path_for_id(project_path)
+        return hashlib.md5(normalized.encode()).hexdigest()[:12]
 
     def register_project(
         self,

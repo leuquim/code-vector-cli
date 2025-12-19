@@ -5,6 +5,7 @@ import hashlib
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 from qdrant_client import QdrantClient
+from code_vector_db import normalize_path_for_id
 from qdrant_client.models import (
     Distance, VectorParams, PointStruct,
     Filter, FieldCondition, MatchValue, Range,
@@ -29,17 +30,34 @@ class VectorStore:
     ]
 
     def __init__(self, project_path: str, host: str = "localhost", port: int = 6333):
-        self.client = QdrantClient(
-            host=host,
-            port=port,
-            timeout=300  # 5 minute timeout for operations (increased from default 60s)
-        )
+        # Check for local mode (no server required - faster on Windows)
+        use_local = os.environ.get("QDRANT_LOCAL", "").lower() == "true"
+        local_path = os.environ.get("QDRANT_LOCAL_PATH",
+                                     os.path.expanduser("~/.local/share/code-vector-db/qdrant-local"))
+
+        if use_local:
+            # Local embedded mode - no server required, native performance
+            os.makedirs(local_path, exist_ok=True)
+            self.client = QdrantClient(path=local_path)
+            self._mode = "local"
+        else:
+            # Remote server mode - check env vars for host/port
+            host = os.environ.get("QDRANT_HOST", host)
+            port = int(os.environ.get("QDRANT_PORT", port))
+            self.client = QdrantClient(
+                host=host,
+                port=port,
+                timeout=300  # 5 minute timeout for operations
+            )
+            self._mode = "remote"
+
         self.project_path = project_path
         self.project_id = self._get_project_id(project_path)
 
     def _get_project_id(self, project_path: str) -> str:
-        """Generate unique project ID from path"""
-        return hashlib.md5(os.path.abspath(project_path).encode()).hexdigest()[:12]
+        """Generate unique project ID from normalized path (cross-platform compatible)"""
+        normalized = normalize_path_for_id(project_path)
+        return hashlib.md5(normalized.encode()).hexdigest()[:12]
 
     def _collection_name(self, base_name: str) -> str:
         """Get project-specific collection name"""
@@ -108,14 +126,14 @@ class VectorStore:
                     memmap_threshold=50000     # Use memory mapping for large segments
                 )
             )
-            print(f"✓ Created collection: {name}")
+            print(f"[OK] Created collection: {name}")
 
     def delete_collections(self):
         """Delete all project collections"""
         for collection in self.ALL_COLLECTIONS:
             try:
                 self.client.delete_collection(self._collection_name(collection))
-                print(f"✓ Deleted collection: {collection}")
+                print(f"[OK] Deleted collection: {collection}")
             except Exception as e:
                 print(f"  Collection {collection} does not exist or already deleted")
 

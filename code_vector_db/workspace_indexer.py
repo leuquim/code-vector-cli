@@ -33,7 +33,7 @@ class WorkspaceIndexer:
         print(f"Workspace: {self.workspace_path}")
         print(f"Found {len(self.repos)} repositories:")
         for repo in self.repos:
-            print(f"  • {repo.name}")
+            print(f"  - {repo.name}")
 
     def _discover_repos(self) -> List[Path]:
         """
@@ -189,7 +189,7 @@ class WorkspaceIndexer:
         """Initialize shared vector database collections"""
         print("\nInitializing workspace vector database...")
         self.vector_store.initialize_collections()
-        print("✓ Collections created")
+        print("[OK] Collections created")
 
     def index_workspace(self, incremental: bool = False):
         """
@@ -270,16 +270,16 @@ class WorkspaceIndexer:
                 # Mark repo as completed
                 self._mark_repo_status(repo_path.name, "completed")
 
-                print(f"  ✓ Indexed {repo_path.name}")
+                print(f"  [OK] Indexed {repo_path.name}")
 
             except Exception as e:
-                print(f"  ✗ Error indexing {repo_path.name}: {e}")
+                print(f"  [FAIL] Error indexing {repo_path.name}: {e}")
                 # Mark as failed/pending on error
                 self._mark_repo_status(repo_path.name, "error")
                 continue
 
         print("\n" + "=" * 60)
-        print("✓ Workspace indexing complete!")
+        print("[OK] Workspace indexing complete!")
         print(f"\nIndexed {len(self.repos)} repositories into shared collections")
         print(f"Project ID: {self.vector_store.project_id}")
 

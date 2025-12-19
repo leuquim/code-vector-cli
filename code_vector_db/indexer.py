@@ -89,7 +89,7 @@ class CodebaseIndexer:
         if self.is_multi_repo:
             print(f"  Multi-repo mode: {len(self.repos)} repositories detected")
             for repo in self.repos:
-                print(f"    • {repo['name']}")
+                print(f"    - {repo['name']}")
         elif self.repos:
             print(f"  Single-repo mode: {self.repos[0]['name']}")
         else:
@@ -266,7 +266,7 @@ class CodebaseIndexer:
             collection_stats=collection_stats
         )
 
-        print("\n✓ Indexing complete!")
+        print("\n[OK] Indexing complete!")
 
     def _index_multi_repo(self, incremental: bool = False, repo_filter: str = None):
         """Index multiple repositories with repo metadata
@@ -344,17 +344,17 @@ class CodebaseIndexer:
                 self.project_path = original_path
                 self._current_repo_name = None
 
-                print(f"✓ Indexing complete!")
-                print(f"  ✓ Indexed {repo_name}")
+                print(f"[OK] Indexing complete!")
+                print(f"  [OK] Indexed {repo_name}")
 
             except Exception as e:
-                print(f"  ✗ Error indexing {repo_name}: {e}")
+                print(f"  [FAIL] Error indexing {repo_name}: {e}")
                 self.project_path = original_path
                 self._current_repo_name = None
                 continue
 
         print("\n" + "=" * 60)
-        print("✓ Workspace indexing complete!")
+        print("[OK] Workspace indexing complete!")
         print(f"\nIndexed {len(self.repos)} repositories into shared collections")
 
         # Register workspace project in metadata
@@ -371,7 +371,7 @@ class CodebaseIndexer:
             file_count=total_files,
             collection_stats=collection_stats
         )
-        print(f"\n✓ Registered workspace in metadata: {self.project_path}")
+        print(f"\n[OK] Registered workspace in metadata: {self.project_path}")
 
     def _filter_changed_files(self, files: List[Path]) -> List[Path]:
         """Filter files to only those changed since last index"""
@@ -495,7 +495,7 @@ class CodebaseIndexer:
                 all_file_chunks = []
 
             # Show completion of batch
-            print(f"  ✓ Completed batch: {batch_end}/{len(files)} files processed")
+            print(f"  [OK] Completed batch: {batch_end}/{len(files)} files processed")
 
         # Final progress update
         print(f"  Progress: {len(files)}/{len(files)}")

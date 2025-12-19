@@ -342,7 +342,7 @@ class OpenAIEmbedder:
                     timeout=60.0
                 )
                 all_embeddings.extend([item.embedding for item in response.data])
-                print(f"    ✓ Successfully embedded truncated text")
+                print(f"    [OK] Successfully embedded truncated text")
             except Exception as e:
                 raise RuntimeError(
                     f"Cannot embed text even after aggressive truncation. "
@@ -365,7 +365,7 @@ class OpenAIEmbedder:
                         f"Failed to embed text {i+1}/{len(batch)} "
                         f"(length: {len(text)} chars). Aborting to prevent incomplete index."
                     ) from e
-            print(f"    ✓ Successfully processed all {len(batch)} texts individually")
+            print(f"    [OK] Successfully processed all {len(batch)} texts individually")
 
     def _handle_bad_request_error(self, batch, error):
         """Handle non-token-limit bad request errors"""

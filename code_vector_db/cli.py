@@ -5,6 +5,7 @@ import sys
 import os
 import argparse
 import json
+import time
 from pathlib import Path
 
 from code_vector_db.indexer import CodebaseIndexer
@@ -16,7 +17,7 @@ def cmd_init(args):
     """Initialize vector database for project and index codebase"""
     indexer = CodebaseIndexer(args.project_path)
     indexer.initialize()
-    print(f"\n✓ Initialized vector database for: {args.project_path}")
+    print(f"\n[OK] Initialized vector database for: {args.project_path}")
     print("\nIndexing codebase...")
     indexer.index_codebase(incremental=False)
 
@@ -32,7 +33,7 @@ def cmd_reindex_file(args):
     """Reindex a single file"""
     indexer = CodebaseIndexer(args.project_path)
     indexer.reindex_file(args.file)
-    print(f"✓ Reindexed: {args.file}")
+    print(f"[OK] Reindexed: {args.file}")
 
 
 def _read_code_snippet(project_path, file_path, start_line, end_line, context_lines=3, max_lines=50):
@@ -135,13 +136,17 @@ def cmd_search_hybrid(args):
 
 def cmd_search(args):
     """Search code"""
+    t_start = time.time()
+
     query_interface = QueryInterface(args.project_path)
+    t_init = time.time()
 
     results = query_interface.search_code(
         args.query,
         limit=args.limit,
         threshold=args.threshold
     )
+    t_search = time.time()
 
     if not results:
         print(f"\nNo results found for: '{args.query}'")
@@ -152,6 +157,12 @@ def cmd_search(args):
     print(f"\nFound {len(results)} results (threshold: {args.threshold}):\n")
     for i, result in enumerate(results, 1):
         _format_search_result(result, i, args)
+
+    # Print timing breakdown
+    init_ms = (t_init - t_start) * 1000
+    search_ms = (t_search - t_init) * 1000
+    total_ms = (t_search - t_start) * 1000
+    print(f"\n[Timing] Init: {init_ms:.0f}ms | Search: {search_ms:.0f}ms | Total: {total_ms:.0f}ms")
 
 
 def cmd_similar(args):
@@ -352,13 +363,13 @@ def cmd_install_hook(args):
     if hook_dest.exists():
         backup = hook_dest.with_suffix(".backup")
         shutil.copy(hook_dest, backup)
-        print(f"✓ Backed up existing hook to {backup}")
+        print(f"[OK] Backed up existing hook to {backup}")
 
     # Install hook
     shutil.copy(hook_source, hook_dest)
     hook_dest.chmod(0o755)
 
-    print(f"✓ Installed post-commit hook at {hook_dest}")
+    print(f"[OK] Installed post-commit hook at {hook_dest}")
     print("  Vector database will auto-update on commits")
 
 
@@ -451,7 +462,7 @@ def cmd_migrate_conversations(args):
     if points:
         vector_store.upsert_points(VectorStore.CONVERSATIONS, points)
 
-    print(f"\n✓ Migrated {total_messages} conversation messages")
+    print(f"\n[OK] Migrated {total_messages} conversation messages")
     print(f"  Use search-conversations to search conversations")
 
 
@@ -501,9 +512,9 @@ def cmd_list_projects(args):
             print(f"  Path: {metadata_info['path']}")
             path_exists = Path(metadata_info['path']).exists()
             if not path_exists:
-                print(f"  Status: ⚠️  Path no longer exists")
+                print(f"  Status: [WARN]  Path no longer exists")
             else:
-                print(f"  Status: ✓ Active")
+                print(f"  Status: [OK] Active")
 
             print(f"  Indexed: {metadata_info.get('indexed_at', 'unknown')}")
             print(f"  Updated: {metadata_info.get('last_updated', 'unknown')}")
@@ -513,7 +524,7 @@ def cmd_list_projects(args):
                 total_points = sum(metadata_info['collection_stats'].values())
                 print(f"  Vectors: {total_points:,}")
         else:
-            print(f"  Path: ⚠️  Unknown (not in metadata registry)")
+            print(f"  Path: [WARN]  Unknown (not in metadata registry)")
             print(f"  Status: Orphaned - no metadata")
 
         print(f"  Collections: {len(collections)}")
@@ -546,7 +557,7 @@ def cmd_list_projects(args):
             orphaned_meta.append((project_id, info))
 
     if orphaned_meta:
-        print(f"\n⚠️  Found {len(orphaned_meta)} projects in metadata but not in Qdrant:")
+        print(f"\n[WARN]  Found {len(orphaned_meta)} projects in metadata but not in Qdrant:")
         for project_id, info in orphaned_meta:
             print(f"  - {project_id}: {info['path']}")
         print("\nRun: code-vector-cli cleanup-metadata")
@@ -558,11 +569,11 @@ def cmd_cleanup_metadata(args):
     removed = metadata.cleanup_missing_projects()
 
     if removed:
-        print(f"\n✓ Removed {len(removed)} missing projects:")
+        print(f"\n[OK] Removed {len(removed)} missing projects:")
         for item in removed:
             print(f"  - {item}")
     else:
-        print("\n✓ No missing projects found. All metadata is valid.")
+        print("\n[OK] No missing projects found. All metadata is valid.")
 
 
 def cmd_delete(args):
@@ -574,7 +585,7 @@ def cmd_delete(args):
     # Confirm deletion unless --force is used
     if not args.force:
         project_id = vector_store.project_id
-        print(f"\n⚠️  WARNING: This will delete all indexed data for:")
+        print(f"\n[WARN]  WARNING: This will delete all indexed data for:")
         print(f"   Path: {args.project_path}")
         print(f"   Project ID: {project_id}")
         print(f"\nCollections to be deleted:")
@@ -583,7 +594,7 @@ def cmd_delete(args):
 
         response = input("\nAre you sure you want to continue? (yes/no): ")
         if response.lower() not in ['yes', 'y']:
-            print("\n✗ Deletion cancelled")
+            print("\n[FAIL] Deletion cancelled")
             return
 
     # Delete collections
@@ -594,7 +605,7 @@ def cmd_delete(args):
     metadata = ProjectMetadata()
     metadata.unregister_project(args.project_path)
 
-    print(f"\n✓ Successfully deleted all data for project")
+    print(f"\n[OK] Successfully deleted all data for project")
 
 
 def main():
