@@ -16,6 +16,7 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 - [Configuration](#configuration)
   - [Using OpenAI Embeddings](#using-openai-embeddings-faster-requires-api-key)
   - [Using Local Embeddings](#using-local-embeddings-free-no-api-key-needed)
+  - [Windows Configuration](#windows-configuration)
 - [Usage](#usage)
   - [Indexing Commands](#indexing-commands)
   - [Search Commands](#search-commands)
@@ -46,6 +47,7 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 - **Impact Analysis**: Analyze dependencies and find code affected by changes
 - **Context Selection**: AI-powered file selection for specific tasks
 - **Similarity Search**: Find similar code patterns across your codebase
+- **Cross-Platform**: Works on Windows, Linux, and macOS with shared indexes between Windows and WSL
 
 ## Installation
 
@@ -58,9 +60,12 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 ### Install Qdrant
 
 ```bash
-# Using Docker (recommended)
-docker pull qdrant/qdrant
-docker run -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage qdrant/qdrant
+# Using Docker Compose (recommended)
+docker compose up -d
+
+# Or using Docker directly
+docker run -d --name qdrant -p 6333:6333 -p 6334:6334 \
+  -v qdrant_storage:/qdrant/storage qdrant/qdrant
 
 # Or using native binary - see https://qdrant.tech/documentation/quick-start/
 ```
@@ -157,10 +162,53 @@ USE_OPENAI_EMBEDDINGS=true
 OPENAI_API_KEY=sk-your-key
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 
-# Qdrant connection
+# Qdrant connection (remote server mode)
 QDRANT_HOST=localhost
 QDRANT_PORT=6333
+
+# Or use embedded local mode (no server needed)
+QDRANT_LOCAL=true
+QDRANT_LOCAL_PATH=~/.local/share/code-vector-db/qdrant-local
 ```
+
+### Windows Configuration
+
+The CLI works natively on Windows. For best performance:
+
+**1. Use IP address instead of hostname:**
+
+Windows DNS resolution for `localhost` can be slow (~5 seconds per request). Use `127.0.0.1` instead:
+
+```bash
+# In ~/.code-vector-db.env
+QDRANT_HOST=127.0.0.1
+QDRANT_PORT=6333
+```
+
+**2. Cross-platform index sharing (Windows + WSL):**
+
+The CLI automatically normalizes paths so Windows and WSL share the same index. A project at `C:\projects\myapp` and `/mnt/c/projects/myapp` will use the same Qdrant collections.
+
+**3. Running Qdrant on Windows:**
+
+Option A - Docker Desktop (recommended):
+```bash
+docker compose up -d
+```
+
+Option B - WSL with port forwarding:
+```bash
+# In WSL, Qdrant binds to WSL's IP. From Windows, use:
+QDRANT_HOST=127.0.0.1
+QDRANT_PORT=6333
+```
+
+Option C - Embedded local mode (no server):
+```bash
+# In ~/.code-vector-db.env
+QDRANT_LOCAL=true
+```
+Note: Local mode is slower for searches (~10s vs ~2s) due to disk I/O.
 
 ## Usage
 
