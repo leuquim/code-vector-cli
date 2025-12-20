@@ -5,8 +5,8 @@ services:
     image: qdrant/qdrant:latest
     container_name: qdrant
     ports:
-      - "6333:6333"  # REST API
-      - "6334:6334"  # gRPC API
+      - "6335:6333"  # REST API (host:container)
+      - "6336:6334"  # gRPC API (host:container)
     volumes:
       - qdrant_storage:/qdrant/storage
     restart: unless-stopped

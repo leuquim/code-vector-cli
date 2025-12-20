@@ -8,6 +8,19 @@ import json
 import time
 from pathlib import Path
 
+# Load .env file early (before any other imports that might use env vars)
+try:
+    from dotenv import load_dotenv
+    for env_path in [
+        Path.home() / '.code-vector-db.env',
+        Path.cwd() / '.env',
+    ]:
+        if env_path.exists():
+            load_dotenv(env_path)
+            break
+except ImportError:
+    pass
+
 from code_vector_db.indexer import CodebaseIndexer
 from code_vector_db.query import QueryInterface
 from code_vector_db.metadata import ProjectMetadata
@@ -41,7 +54,9 @@ def _read_code_snippet(project_path, file_path, start_line, end_line, context_li
     try:
         # In workspace mode, file_path already includes the repo subdirectory
         # e.g., "builder/processors/build.js" or "cms/include/sendProgress.js"
-        full_path = Path(project_path) / file_path
+        # Normalize path separators for cross-platform compatibility
+        normalized_path = file_path.replace('\\', '/')
+        full_path = Path(project_path) / normalized_path
 
         if not full_path.exists():
             return None
@@ -475,7 +490,9 @@ def cmd_list_projects(args):
 
     # Get collections from Qdrant
     try:
-        client = QdrantClient(host="localhost", port=6333)
+        host = os.environ.get("QDRANT_HOST", "localhost")
+        port = int(os.environ.get("QDRANT_PORT", 6333))
+        client = QdrantClient(host=host, port=port)
         collections_response = client.get_collections()
         collections = [c.name for c in collections_response.collections]
     except Exception as e:
@@ -579,33 +596,71 @@ def cmd_cleanup_metadata(args):
 def cmd_delete(args):
     """Delete all collections for the project"""
     from code_vector_db.vector_store import VectorStore
+    from qdrant_client import QdrantClient
+    import os
 
-    vector_store = VectorStore(args.project_path)
+    project_id = getattr(args, 'project_id', None)
 
-    # Confirm deletion unless --force is used
-    if not args.force:
-        project_id = vector_store.project_id
-        print(f"\n[WARN]  WARNING: This will delete all indexed data for:")
-        print(f"   Path: {args.project_path}")
-        print(f"   Project ID: {project_id}")
-        print(f"\nCollections to be deleted:")
+    if project_id:
+        # Delete by project ID directly (for orphaned projects)
+        host = os.environ.get("QDRANT_HOST", "localhost")
+        port = int(os.environ.get("QDRANT_PORT", 6333))
+        client = QdrantClient(host=host, port=port, timeout=300)
+
+        if not args.force:
+            print(f"\n[WARN]  WARNING: This will delete all indexed data for:")
+            print(f"   Project ID: {project_id}")
+            print(f"\nCollections to be deleted:")
+            for collection in VectorStore.ALL_COLLECTIONS:
+                print(f"   - {project_id}_{collection}")
+
+            response = input("\nAre you sure you want to continue? (yes/no): ")
+            if response.lower() not in ['yes', 'y']:
+                print("\n[FAIL] Deletion cancelled")
+                return
+
+        print(f"\nDeleting collections for project ID: {project_id}")
+        import requests
         for collection in VectorStore.ALL_COLLECTIONS:
-            print(f"   - {collection}")
+            collection_name = f"{project_id}_{collection}"
+            try:
+                url = f"http://{host}:{port}/collections/{collection_name}"
+                resp = requests.delete(url, timeout=30)
+                if resp.status_code == 200:
+                    print(f"[OK] Deleted collection: {collection_name}")
+                elif resp.status_code == 404:
+                    print(f"  Collection {collection_name} does not exist")
+                else:
+                    print(f"[WARN] Status {resp.status_code} for {collection_name}")
+            except Exception as e:
+                print(f"[WARN] Error deleting {collection_name}: {e}")
 
-        response = input("\nAre you sure you want to continue? (yes/no): ")
-        if response.lower() not in ['yes', 'y']:
-            print("\n[FAIL] Deletion cancelled")
-            return
+        print(f"\n[OK] Successfully deleted all data for project {project_id}")
+    else:
+        # Delete by path (original behavior)
+        vector_store = VectorStore(args.project_path)
 
-    # Delete collections
-    print(f"\nDeleting collections for: {args.project_path}")
-    vector_store.delete_collections()
+        if not args.force:
+            print(f"\n[WARN]  WARNING: This will delete all indexed data for:")
+            print(f"   Path: {args.project_path}")
+            print(f"   Project ID: {vector_store.project_id}")
+            print(f"\nCollections to be deleted:")
+            for collection in VectorStore.ALL_COLLECTIONS:
+                print(f"   - {collection}")
 
-    # Clean up metadata
-    metadata = ProjectMetadata()
-    metadata.unregister_project(args.project_path)
+            response = input("\nAre you sure you want to continue? (yes/no): ")
+            if response.lower() not in ['yes', 'y']:
+                print("\n[FAIL] Deletion cancelled")
+                return
 
-    print(f"\n[OK] Successfully deleted all data for project")
+        print(f"\nDeleting collections for: {args.project_path}")
+        vector_store.delete_collections()
+
+        # Clean up metadata
+        metadata = ProjectMetadata()
+        metadata.unregister_project(args.project_path)
+
+        print(f"\n[OK] Successfully deleted all data for project")
 
 
 def main():
@@ -703,6 +758,7 @@ def main():
     # delete command
     delete_parser = subparsers.add_parser("delete", help="Delete indexed data")
     delete_parser.add_argument("--force", action="store_true", help="Skip confirmation")
+    delete_parser.add_argument("--project-id", type=str, help="Delete by project ID (for orphaned projects)")
 
     args = parser.parse_args()
 

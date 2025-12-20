@@ -4,6 +4,20 @@ import os
 import hashlib
 from typing import List, Dict, Optional, Any
 from pathlib import Path
+
+# Load .env file if it exists (before importing qdrant_client)
+try:
+    from dotenv import load_dotenv
+    for env_path in [
+        Path.home() / '.code-vector-db.env',
+        Path.cwd() / '.env',
+    ]:
+        if env_path.exists():
+            load_dotenv(env_path)
+            break
+except ImportError:
+    pass
+
 from qdrant_client import QdrantClient
 from code_vector_db import normalize_path_for_id
 from qdrant_client.models import (

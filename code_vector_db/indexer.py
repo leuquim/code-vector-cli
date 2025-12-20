@@ -24,7 +24,8 @@ def _process_file_worker(file_info: Tuple[Path, Path]) -> Optional[Tuple[List, L
 
     try:
         content = file_path.read_text(errors='ignore')
-        rel_path = str(file_path.relative_to(project_path))
+        # Normalize path separators for cross-platform compatibility
+        rel_path = str(file_path.relative_to(project_path)).replace('\\', '/')
 
         # Create a chunker for this worker
         ast_chunker = ASTChunker()
@@ -145,7 +146,7 @@ class CodebaseIndexer:
 
     def _should_ignore(self, path: Path) -> bool:
         """Check if path should be ignored"""
-        path_str = str(path.relative_to(self.project_path))
+        path_str = str(path.relative_to(self.project_path)).replace('\\', '/')
 
         # Check against gitignore patterns using git check-ignore
         try:
@@ -537,7 +538,8 @@ class CodebaseIndexer:
         for file_path in files:
             try:
                 content = file_path.read_text(errors='ignore')
-                rel_path = str(file_path.relative_to(self.project_path))
+                # Normalize path separators for cross-platform compatibility
+                rel_path = str(file_path.relative_to(self.project_path)).replace('\\', '/')
 
                 # Add repo prefix if in multi-repo mode
                 if self.is_multi_repo and hasattr(self, '_current_repo_name') and self._current_repo_name:
@@ -581,7 +583,8 @@ class CodebaseIndexer:
         for file_path in files:
             try:
                 content = file_path.read_text(errors='ignore')
-                rel_path = str(file_path.relative_to(self.project_path))
+                # Normalize path separators for cross-platform compatibility
+                rel_path = str(file_path.relative_to(self.project_path)).replace('\\', '/')
 
                 # Add repo prefix if in multi-repo mode
                 if self.is_multi_repo and hasattr(self, '_current_repo_name') and self._current_repo_name:
