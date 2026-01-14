@@ -48,6 +48,49 @@ class QueryInterface:
         self.code_embedder = get_code_embedder()
         self.text_embedder = get_text_embedder()
 
+    def _search_parallel(
+        self,
+        query_vector: List[float],
+        limit: int = 10,
+        filters: Optional[Dict] = None,
+        threshold: float = 0.3
+    ) -> List[SearchResult]:
+        """Helper to run searches across code collections in parallel"""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        collections = [
+            VectorStore.CODE_FUNCTIONS,
+            VectorStore.CODE_CLASSES,
+            VectorStore.CODE_FILES
+        ]
+
+        results = []
+        
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            future_to_collection = {
+                executor.submit(
+                    self.vector_store.search,
+                    collection=collection,
+                    query_vector=query_vector,
+                    limit=limit,
+                    filters=filters,
+                    score_threshold=threshold
+                ): collection for collection in collections
+            }
+
+            for future in as_completed(future_to_collection):
+                try:
+                    collection_results = future.result()
+                    results.extend(collection_results)
+                except Exception as e:
+                    print(f"Error searching collection {future_to_collection[future]}: {e}")
+
+        # Sort by score and limit
+        results.sort(key=lambda x: x["score"], reverse=True)
+        results = results[:limit]
+
+        return [SearchResult(r["score"], r["metadata"]) for r in results]
+
     def search_code(
         self,
         query: str,
@@ -55,31 +98,10 @@ class QueryInterface:
         filters: Optional[Dict] = None,
         threshold: float = 0.3
     ) -> List[SearchResult]:
-        """Search for code using semantic similarity"""
+        """Search for code using semantic similarity across multiple collections in parallel"""
         # Generate query embedding
         query_vector = self.code_embedder.embed(query)[0]
-
-        # Search across code collections
-        results = []
-        for collection in [
-            VectorStore.CODE_FUNCTIONS,
-            VectorStore.CODE_CLASSES,
-            VectorStore.CODE_FILES
-        ]:
-            collection_results = self.vector_store.search(
-                collection=collection,
-                query_vector=query_vector,
-                limit=limit,
-                filters=filters,
-                score_threshold=threshold
-            )
-            results.extend(collection_results)
-
-        # Sort by score and limit
-        results.sort(key=lambda x: x["score"], reverse=True)
-        results = results[:limit]
-
-        return [SearchResult(r["score"], r["metadata"]) for r in results]
+        return self._search_parallel(query_vector, limit, filters, threshold)
 
     def search_documentation(
         self,
@@ -151,29 +173,12 @@ class QueryInterface:
         # Generate embedding
         query_vector = self.code_embedder.embed(content)[0]
 
-        # Search
-        results = []
-        for collection in [
-            VectorStore.CODE_FUNCTIONS,
-            VectorStore.CODE_CLASSES,
-            VectorStore.CODE_FILES
-        ]:
-            collection_results = self.vector_store.search(
-                collection=collection,
-                query_vector=query_vector,
-                limit=limit,
-                score_threshold=threshold
-            )
-            results.extend(collection_results)
+        # Use parallel search
+        results = self._search_parallel(query_vector, limit, threshold=threshold)
 
         # Filter out the file itself
-        results = [r for r in results if r["metadata"]["file_path"] != str(path)]
-
-        # Sort and limit
-        results.sort(key=lambda x: x["score"], reverse=True)
-        results = results[:limit]
-
-        return [SearchResult(r["score"], r["metadata"]) for r in results]
+        results = [r for r in results if r.file_path != str(path)]
+        return results
 
     def find_similar(
         self,
@@ -189,27 +194,9 @@ class QueryInterface:
 
         # Otherwise treat as semantic query
         query_vector = self.code_embedder.embed(query)[0]
-
-        # Search
-        results = []
-        for collection in [
-            VectorStore.CODE_FUNCTIONS,
-            VectorStore.CODE_CLASSES,
-            VectorStore.CODE_FILES
-        ]:
-            collection_results = self.vector_store.search(
-                collection=collection,
-                query_vector=query_vector,
-                limit=limit,
-                score_threshold=threshold
-            )
-            results.extend(collection_results)
-
-        # Sort and limit
-        results.sort(key=lambda x: x["score"], reverse=True)
-        results = results[:limit]
-
-        return [SearchResult(r["score"], r["metadata"]) for r in results]
+        
+        # Use parallel search
+        return self._search_parallel(query_vector, limit, threshold=threshold)
 
     def get_context_for_task(
         self,

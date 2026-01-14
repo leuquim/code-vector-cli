@@ -3,9 +3,8 @@
 import os
 from typing import List, Union
 from pathlib import Path
-import torch
-from sentence_transformers import SentenceTransformer
-from transformers import AutoModel, AutoTokenizer
+# Imports moved to lazy loading in classes to improve CLI startup speed
+
 
 # Load .env file if it exists
 try:
@@ -51,6 +50,10 @@ class CodeEmbedder:
     def load(self):
         """Lazy load the model"""
         if self.model is None:
+            # Lazy import heavy dependencies
+            import torch
+            from transformers import AutoModel, AutoTokenizer
+
             # Optimize PyTorch for CPU inference - use all available cores
             import os
             num_threads = os.cpu_count()
@@ -82,6 +85,8 @@ class CodeEmbedder:
         # Larger batches = better throughput on CPU
         batch_size = 256  # Increased for better CPU utilization
         all_embeddings = []
+
+        import torch
 
         for i in range(0, len(texts), batch_size):
             batch_texts = texts[i:i + batch_size]
@@ -120,6 +125,7 @@ class TextEmbedder:
     def load(self):
         """Lazy load the model"""
         if self.model is None:
+            from sentence_transformers import SentenceTransformer
             self.model = SentenceTransformer('sentence-transformers/all-mpnet-base-v2')
 
     def embed(self, texts: Union[str, List[str]]) -> List[List[float]]:

@@ -15,11 +15,15 @@ from .metadata import ProjectMetadata
 
 
 # Global worker function for multiprocessing (needs to be at module level)
+# Global chunker instance for workers
+_worker_chunker = None
+
 def _process_file_worker(file_info: Tuple[Path, Path]) -> Optional[Tuple[List, List, List]]:
     """
     Worker function to process a single file in parallel
     Returns (function_chunks, class_chunks, file_chunks) or None on error
     """
+    global _worker_chunker
     file_path, project_path = file_info
 
     try:
@@ -27,9 +31,11 @@ def _process_file_worker(file_info: Tuple[Path, Path]) -> Optional[Tuple[List, L
         # Normalize path separators for cross-platform compatibility
         rel_path = str(file_path.relative_to(project_path)).replace('\\', '/')
 
-        # Create a chunker for this worker
-        ast_chunker = ASTChunker()
-        chunks = ast_chunker.chunk_file(rel_path, content)
+        # Initialize chunker if not present (reuse across calls in same process)
+        if _worker_chunker is None:
+            _worker_chunker = ASTChunker()
+            
+        chunks = _worker_chunker.chunk_file(rel_path, content)
 
         # Separate by type
         function_chunks = [c for c in chunks if c.chunk_type == "function"]
