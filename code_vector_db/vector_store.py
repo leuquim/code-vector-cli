@@ -246,9 +246,9 @@ class VectorStore:
             if must_conditions:
                 qdrant_filter = Filter(must=must_conditions)
 
-        results = self.client.search(
+        results = self.client.query_points(
             collection_name=collection_name,
-            query_vector=query_vector,
+            query=query_vector,
             limit=limit,
             query_filter=qdrant_filter,
             score_threshold=score_threshold
@@ -256,11 +256,11 @@ class VectorStore:
 
         return [
             {
-                "id": result.id,
-                "score": result.score,
-                "metadata": result.payload
+                "id": point.id,
+                "score": point.score,
+                "metadata": point.payload
             }
-            for result in results
+            for point in results.points
         ]
 
     def get_stats(self) -> Dict[str, Any]:

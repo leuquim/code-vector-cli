@@ -630,6 +630,8 @@ class CodebaseIndexer:
     def reindex_file(self, file_path: str):
         """Reindex a single file (force reindex, ignoring change detection)"""
         path = Path(file_path)
+        if not path.is_absolute():
+            path = (self.workspace_root / path).resolve()
         if not path.exists():
             # File deleted, remove from index
             for collection in VectorStore.ALL_COLLECTIONS:
