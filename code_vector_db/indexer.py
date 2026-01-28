@@ -628,7 +628,7 @@ class CodebaseIndexer:
             print(f"  Indexed {len(points)} configuration files")
 
     def reindex_file(self, file_path: str):
-        """Reindex a single file (for incremental updates)"""
+        """Reindex a single file (force reindex, ignoring change detection)"""
         path = Path(file_path)
         if not path.exists():
             # File deleted, remove from index
@@ -636,8 +636,13 @@ class CodebaseIndexer:
                 self.vector_store.delete_by_file(collection, str(path))
             return
 
-        # Determine file type and index accordingly
+        # Delete existing entries for this file first
+        rel_path = str(path.relative_to(self.workspace_root)).replace('\\', '/')
+        for collection in VectorStore.ALL_COLLECTIONS:
+            self.vector_store.delete_by_file(collection, rel_path)
+
+        # Determine file type and index accordingly (incremental=False to force reindex)
         if path.suffix in self.DOC_EXTENSIONS or path.suffix in self.CONFIG_EXTENSIONS:
-            self._index_documentation([path], incremental=True)
+            self._index_documentation([path], incremental=False)
         elif self.ast_chunker.get_language(str(path)):
-            self._index_code_files([path], incremental=True)
+            self._index_code_files([path], incremental=False)

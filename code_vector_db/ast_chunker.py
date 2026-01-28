@@ -91,10 +91,23 @@ class ASTChunker:
         "function_item", "function", "method", "constructor"
     }
 
+    # Arrow functions and function expressions (JS/TS)
+    ARROW_FUNCTION_NODES = {
+        "arrow_function", "function_expression", "function"
+    }
+
+    # Variable declarations that may contain arrow functions
+    VARIABLE_DECLARATION_NODES = {
+        "lexical_declaration", "variable_declaration"
+    }
+
     CLASS_NODES = {
         "class_definition", "class_declaration", "interface_declaration",
         "struct_item", "impl_item", "trait_item"
     }
+
+    # Minimum lines for a function to be indexed (filter out tiny callbacks)
+    MIN_FUNCTION_LINES = 5
 
     def __init__(self):
         self.parsers = {}
@@ -148,13 +161,22 @@ class ASTChunker:
         # Extract functions and classes
         self._extract_nodes(tree.root_node, content, file_path, language, chunks)
 
-        # If no chunks extracted, return file-level chunk
-        if not chunks:
+        total_lines = content.count('\n') + 1
+
+        # Calculate how much of the file is covered by extracted chunks
+        covered_lines = sum(c.end_line - c.start_line + 1 for c in chunks)
+        coverage_ratio = covered_lines / total_lines if total_lines > 0 else 1.0
+
+        # Add file-level chunk if:
+        # 1. No chunks extracted, OR
+        # 2. Large file (100+ lines) with low coverage (<50% of lines covered)
+        # This ensures big React components and other code don't slip through
+        if not chunks or (total_lines >= 100 and coverage_ratio < 0.5):
             chunks.append(CodeChunk(
                 content=content,
                 file_path=file_path,
                 start_line=1,
-                end_line=content.count('\n') + 1,
+                end_line=total_lines,
                 chunk_type="file",
                 language=language
             ))
@@ -191,6 +213,16 @@ class ASTChunker:
                 complexity=self._estimate_complexity(node)
             ))
 
+        # Handle variable declarations containing arrow functions (React components, etc.)
+        elif node_type in self.VARIABLE_DECLARATION_NODES:
+            arrow_func = self._find_arrow_function_in_declaration(node, content, file_path, language)
+            if arrow_func:
+                chunks.append(arrow_func)
+            # Still recurse to find nested functions
+            for child in node.children:
+                self._extract_nodes(child, content, file_path, language, chunks, parent)
+            return
+
         elif node_type in self.CLASS_NODES:
             name = self._get_node_name(node, content)
             chunk_content = self._get_node_text(node, content)
@@ -215,6 +247,48 @@ class ASTChunker:
         # Recurse into children
         for child in node.children:
             self._extract_nodes(child, content, file_path, language, chunks, parent)
+
+    def _find_arrow_function_in_declaration(
+        self,
+        node,
+        content: str,
+        file_path: str,
+        language: str
+    ) -> Optional[CodeChunk]:
+        """
+        Extract arrow function or function expression from variable declaration.
+        Handles patterns like: const MyComponent = (props) => { ... }
+        """
+        for child in node.children:
+            if child.type == "variable_declarator":
+                name = None
+                func_node = None
+
+                for declarator_child in child.children:
+                    if declarator_child.type == "identifier":
+                        name = self._get_node_text(declarator_child, content)
+                    elif declarator_child.type in self.ARROW_FUNCTION_NODES:
+                        func_node = declarator_child
+
+                if name and func_node:
+                    start_line, end_line = self._get_node_lines(node)
+                    num_lines = end_line - start_line + 1
+
+                    # Only index functions with meaningful size (skip tiny callbacks)
+                    if num_lines >= self.MIN_FUNCTION_LINES:
+                        chunk_content = self._get_node_text(node, content)
+                        return CodeChunk(
+                            content=chunk_content,
+                            file_path=file_path,
+                            start_line=start_line,
+                            end_line=end_line,
+                            chunk_type="function",
+                            name=name,
+                            parent="",
+                            language=language,
+                            complexity=self._estimate_complexity(func_node)
+                        )
+        return None
 
     def _get_node_name(self, node, content: str) -> str:
         """Extract the name of a function or class"""
