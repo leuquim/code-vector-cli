@@ -26,6 +26,15 @@ from code_vector_db.query import QueryInterface
 from code_vector_db.metadata import ProjectMetadata
 
 
+def _add_path_arg(subparser):
+    """Add --path argument to a subparser"""
+    subparser.add_argument(
+        "--path",
+        default=".",
+        help="Project directory (auto-detects single-repo or multi-repo structure)"
+    )
+
+
 def cmd_init(args):
     """Initialize vector database for project and index codebase"""
     indexer = CodebaseIndexer(args.project_path)
@@ -134,13 +143,18 @@ def cmd_search_hybrid(args):
         limit=args.limit,
         threshold=args.threshold,
         bm25_weight=args.bm25_weight,
-        semantic_weight=args.semantic_weight
+        semantic_weight=args.semantic_weight,
+        repo=getattr(args, 'repo', None)
     )
 
     if not results:
         print(f"\nNo results found for: '{args.query}'")
         print(f"Threshold: {args.threshold}")
         print("Try lowering threshold with -t 0.1 or -t 0.0 for more results")
+        return
+
+    if getattr(args, 'json', False):
+        print(json.dumps([r.to_dict() for r in results], indent=2))
         return
 
     weights_info = f"(semantic: {args.semantic_weight:.1f}, keyword: {args.bm25_weight:.1f})"
@@ -159,7 +173,8 @@ def cmd_search(args):
     results = query_interface.search_code(
         args.query,
         limit=args.limit,
-        threshold=args.threshold
+        threshold=args.threshold,
+        repo=getattr(args, 'repo', None)
     )
     t_search = time.time()
 
@@ -167,6 +182,10 @@ def cmd_search(args):
         print(f"\nNo results found for: '{args.query}'")
         print(f"Threshold: {args.threshold}")
         print("Try lowering threshold with -t 0.1 or -t 0.0 for more results")
+        return
+
+    if getattr(args, 'json', False):
+        print(json.dumps([r.to_dict() for r in results], indent=2))
         return
 
     print(f"\nFound {len(results)} results (threshold: {args.threshold}):\n")
@@ -187,11 +206,11 @@ def cmd_similar(args):
     results = query_interface.find_similar(
         args.query,
         limit=args.limit,
-        threshold=args.threshold
+        threshold=args.threshold,
+        repo=getattr(args, 'repo', None)
     )
 
     # Detect if it was a file path
-    from pathlib import Path
     is_file = Path(args.query).exists() and Path(args.query).is_file()
     query_type = "file" if is_file else "query"
 
@@ -199,6 +218,10 @@ def cmd_similar(args):
         print(f"\nNo similar code found for {query_type}: '{args.query}'")
         print(f"Threshold: {args.threshold}")
         print("Try lowering threshold with -t 0.3 or -t 0.0 for more results")
+        return
+
+    if getattr(args, 'json', False):
+        print(json.dumps([r.to_dict() for r in results], indent=2))
         return
 
     print(f"\nSimilar to {query_type}: '{args.query}'")
@@ -245,7 +268,8 @@ def cmd_context(args):
     context_files = query_interface.get_context_for_task(
         args.task,
         max_files=args.limit,
-        threshold=args.threshold
+        threshold=args.threshold,
+        repo=getattr(args, 'repo', None)
     )
 
     if not context_files:
@@ -273,8 +297,19 @@ def cmd_impact(args):
     results = query_interface.analyze_impact(
         args.query,
         depth=2,
-        threshold=args.threshold
+        threshold=args.threshold,
+        repo=getattr(args, 'repo', None)
     )
+
+    if getattr(args, 'json', False):
+        output = {
+            "query": args.query,
+            "query_type": results.get("query_type", "unknown"),
+            "direct": [r.to_dict() for r in results["direct"]],
+            "indirect": [r.to_dict() for r in results["indirect"]],
+        }
+        print(json.dumps(output, indent=2))
+        return
 
     query_type = results.get("query_type", "unknown")
     print(f"\nImpact analysis for {query_type}: '{args.query}'")
@@ -315,6 +350,10 @@ def cmd_search_docs(args):
         print("No documentation found")
         return
 
+    if getattr(args, 'json', False):
+        print(json.dumps([r.to_dict() for r in results], indent=2))
+        return
+
     print(f"\nFound {len(results)} documentation results:\n")
     for i, result in enumerate(results, 1):
         print(f"{i}. [{result.score:.3f}] {result.file_path}")
@@ -346,8 +385,20 @@ def cmd_search_conversations(args):
 
 def cmd_stats(args):
     """Show statistics"""
-    query_interface = QueryInterface(args.project_path)
+    metadata = ProjectMetadata()
+    project_info = metadata.find_project_by_path(args.project_path)
+
+    if project_info:
+        # Use the registered project's path for correct project_id
+        query_interface = QueryInterface(project_info['path'])
+    else:
+        query_interface = QueryInterface(args.project_path)
+
     stats = query_interface.get_stats()
+
+    if getattr(args, 'json', False):
+        print(json.dumps(stats, indent=2))
+        return
 
     print(f"\nVector Database Statistics")
     print(f"Project ID: {stats['project_id']}\n")
@@ -663,41 +714,117 @@ def cmd_delete(args):
         print(f"\n[OK] Successfully deleted all data for project")
 
 
+def cmd_index_git(args):
+    """Index git commit history"""
+    indexer = CodebaseIndexer(args.project_path)
+    max_commits = getattr(args, 'max_commits', 500)
+    indexer.index_git_history(max_commits=max_commits)
+
+
+def cmd_search_git(args):
+    """Search git commit history"""
+    query_interface = QueryInterface(args.project_path)
+
+    results = query_interface.search_git_history(
+        args.query,
+        limit=args.limit,
+        threshold=args.threshold,
+        repo=getattr(args, 'repo', None)
+    )
+
+    if not results:
+        print(f"\nNo git history found for: '{args.query}'")
+        return
+
+    if getattr(args, 'json', False):
+        output = []
+        for r in results:
+            output.append({
+                "score": round(r.score, 3),
+                "commit": r.metadata.get("commit_hash", "")[:8],
+                "author": r.metadata.get("author", ""),
+                "date": r.metadata.get("date", ""),
+                "message": r.metadata.get("message", ""),
+                "repo": r.metadata.get("repo", ""),
+                "files_changed": r.metadata.get("files_changed", [])
+            })
+        print(json.dumps(output, indent=2))
+        return
+
+    print(f"\nFound {len(results)} commits matching: '{args.query}'\n")
+    for i, result in enumerate(results, 1):
+        commit_hash = result.metadata.get("commit_hash", "")[:8]
+        author = result.metadata.get("author", "")
+        date = result.metadata.get("date", "")[:10]  # Just the date part
+        message = result.metadata.get("message", "")
+        repo = result.metadata.get("repo", "")
+        files = result.metadata.get("files_changed", [])
+
+        repo_prefix = f"[{repo}] " if repo else ""
+        print(f"{i}. [{result.score:.3f}] {repo_prefix}{commit_hash} {date} ({author})")
+        print(f"   {message}")
+        if files:
+            shown_files = files[:5]
+            print(f"   Files: {', '.join(shown_files)}")
+            if len(files) > 5:
+                print(f"   ... and {len(files) - 5} more files")
+        print()
+
+
+def cmd_mcp(args):
+    """Handle MCP commands"""
+    mcp_command = getattr(args, 'mcp_command', None)
+    if mcp_command == "serve":
+        try:
+            from code_vector_db.mcp_server import set_project_path, run_server
+        except ImportError:
+            print("Error: MCP package not installed. Install with: pip install mcp")
+            sys.exit(1)
+        path = os.path.abspath(getattr(args, 'path', '.'))
+        set_project_path(path)
+        run_server()
+    else:
+        print("Usage: code-vector-cli mcp serve [--path PATH]")
+        print("\nStart an MCP server for Claude Code integration")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Code Vector Database CLI - Semantic code search powered by vector embeddings"
-    )
-    parser.add_argument(
-        "--path",
-        default=".",
-        help="Directory to index/search (auto-detects single-repo or multi-repo structure)"
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # init command
-    subparsers.add_parser("init", help="Initialize vector database and index")
+    init_parser = subparsers.add_parser("init", help="Initialize vector database and index")
+    _add_path_arg(init_parser)
 
     # index command
     index_parser = subparsers.add_parser("index", help="Index codebase")
-    index_parser.add_argument("--incremental", action="store_true", help="Incremental indexing (coming soon)")
+    _add_path_arg(index_parser)
+    index_parser.add_argument("--incremental", action="store_true", help="Incremental indexing")
     index_parser.add_argument("--repo", type=str, help="Index only specific repo in multi-repo workspace")
 
     # reindex-file command
     reindex_parser = subparsers.add_parser("reindex-file", help="Reindex single file")
+    _add_path_arg(reindex_parser)
     reindex_parser.add_argument("file", help="File to reindex")
 
     # search command
     search_parser = subparsers.add_parser("search", help="Search code semantically")
+    _add_path_arg(search_parser)
     search_parser.add_argument("query", help="Search query (natural language)")
     search_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
     search_parser.add_argument("-t", "--threshold", type=float, default=0.3, help="Score threshold (0.0-1.0)")
     search_parser.add_argument("--show-parent", action="store_true", help="Show parent class/module")
     search_parser.add_argument("--show-content", action="store_true", help="Show code snippets")
     search_parser.add_argument("-C", "--context-lines", type=int, default=3, help="Context lines (default: 3)")
+    search_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    search_parser.add_argument("--repo", type=str, help="Filter by repository name (e.g., base, frontend, mobile_app)")
 
     # search-hybrid command
     hybrid_parser = subparsers.add_parser("search-hybrid", help="Hybrid search (semantic + keyword BM25)")
+    _add_path_arg(hybrid_parser)
     hybrid_parser.add_argument("query", help="Search query")
     hybrid_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
     hybrid_parser.add_argument("-t", "--threshold", type=float, default=0.3, help="Score threshold")
@@ -706,47 +833,64 @@ def main():
     hybrid_parser.add_argument("-C", "--context-lines", type=int, default=3, help="Context lines around code snippets (default: 3)")
     hybrid_parser.add_argument("--bm25-weight", type=float, default=0.3, help="BM25 keyword weight (default: 0.3)")
     hybrid_parser.add_argument("--semantic-weight", type=float, default=0.7, help="Semantic similarity weight (default: 0.7)")
+    hybrid_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    hybrid_parser.add_argument("--repo", type=str, help="Filter by repository name (e.g., base, frontend, mobile_app)")
 
     # similar command
     similar_parser = subparsers.add_parser("similar", help="Find similar code")
+    _add_path_arg(similar_parser)
     similar_parser.add_argument("query", help="File path OR semantic query")
     similar_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
     similar_parser.add_argument("-t", "--threshold", type=float, default=0.7, help="Score threshold (0.0-1.0)")
     similar_parser.add_argument("--show-content", action="store_true", help="Show code snippets")
     similar_parser.add_argument("-C", "--context-lines", type=int, default=3, help="Context lines (default: 3)")
+    similar_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    similar_parser.add_argument("--repo", type=str, help="Filter by repository name (e.g., base, frontend, mobile_app)")
 
     # context command
     context_parser = subparsers.add_parser("context", help="Get context for task")
+    _add_path_arg(context_parser)
     context_parser.add_argument("task", help="Task description")
     context_parser.add_argument("-n", "--limit", type=int, default=10, help="Max files")
     context_parser.add_argument("-t", "--threshold", type=float, default=0.4, help="Score threshold (0.0-1.0)")
     context_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    context_parser.add_argument("--repo", type=str, help="Filter by repository name (e.g., base, frontend, mobile_app)")
 
     # impact command
     impact_parser = subparsers.add_parser("impact", help="Analyze change impact")
+    _add_path_arg(impact_parser)
     impact_parser.add_argument("query", help="File path OR semantic query")
     impact_parser.add_argument("-t", "--threshold", type=float, default=0.6, help="Score threshold (0.0-1.0)")
+    impact_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    impact_parser.add_argument("--repo", type=str, help="Filter by repository name (e.g., base, frontend, mobile_app)")
 
     # search-docs command
     docs_parser = subparsers.add_parser("search-docs", help="Search documentation")
+    _add_path_arg(docs_parser)
     docs_parser.add_argument("query", help="Search query")
     docs_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
     docs_parser.add_argument("-t", "--threshold", type=float, default=0.3, help="Score threshold (0.0-1.0)")
+    docs_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     # search-conversations command
     conv_parser = subparsers.add_parser("search-conversations", help="Search conversation history")
+    _add_path_arg(conv_parser)
     conv_parser.add_argument("query", help="Search query")
     conv_parser.add_argument("-n", "--limit", type=int, default=5, help="Number of results")
     conv_parser.add_argument("-t", "--threshold", type=float, default=0.3, help="Score threshold (0.0-1.0)")
 
     # stats command
-    subparsers.add_parser("stats", help="Show index statistics")
+    stats_parser = subparsers.add_parser("stats", help="Show index statistics")
+    _add_path_arg(stats_parser)
+    stats_parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     # install-hook command
-    subparsers.add_parser("install-hook", help="Install git post-commit hook")
+    install_hook_parser = subparsers.add_parser("install-hook", help="Install git post-commit hook")
+    _add_path_arg(install_hook_parser)
 
     # migrate-conversations command
-    subparsers.add_parser("migrate-conversations", help="Migrate conversation transcripts")
+    migrate_parser = subparsers.add_parser("migrate-conversations", help="Migrate conversation transcripts")
+    _add_path_arg(migrate_parser)
 
     # list-projects command
     list_parser = subparsers.add_parser("list-projects", help="List all indexed projects")
@@ -757,8 +901,33 @@ def main():
 
     # delete command
     delete_parser = subparsers.add_parser("delete", help="Delete indexed data")
+    _add_path_arg(delete_parser)
     delete_parser.add_argument("--force", action="store_true", help="Skip confirmation")
     delete_parser.add_argument("--project-id", type=str, help="Delete by project ID (for orphaned projects)")
+
+    # index-git command
+    index_git_parser = subparsers.add_parser("index-git", help="Index git commit history")
+    _add_path_arg(index_git_parser)
+    index_git_parser.add_argument("--max-commits", type=int, default=500, help="Max commits per repo (default: 500)")
+
+    # search-git command
+    search_git_parser = subparsers.add_parser("search-git", help="Search git commit history")
+    _add_path_arg(search_git_parser)
+    search_git_parser.add_argument("query", help="Search query")
+    search_git_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
+    search_git_parser.add_argument("-t", "--threshold", type=float, default=0.3, help="Score threshold")
+    search_git_parser.add_argument("--repo", type=str, help="Filter by repository name")
+    search_git_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    # mcp command with serve subcommand
+    mcp_parser = subparsers.add_parser("mcp", help="MCP server commands")
+    mcp_subparsers = mcp_parser.add_subparsers(dest="mcp_command", help="MCP subcommand")
+    mcp_serve_parser = mcp_subparsers.add_parser("serve", help="Start MCP server (stdio transport)")
+    mcp_serve_parser.add_argument(
+        "--path",
+        default=".",
+        help="Project directory to serve"
+    )
 
     args = parser.parse_args()
 
@@ -766,8 +935,8 @@ def main():
         parser.print_help()
         return
 
-    # Resolve path
-    args.path = os.path.abspath(args.path)
+    # Resolve path (use getattr since not all subparsers have --path)
+    args.path = os.path.abspath(getattr(args, 'path', '.'))
 
     # Set legacy aliases for backward compatibility
     args.project_path = args.path
@@ -791,6 +960,9 @@ def main():
         "list-projects": cmd_list_projects,
         "cleanup-metadata": cmd_cleanup_metadata,
         "delete": cmd_delete,
+        "index-git": cmd_index_git,
+        "search-git": cmd_search_git,
+        "mcp": cmd_mcp,
     }
 
     handler = command_map.get(args.command)

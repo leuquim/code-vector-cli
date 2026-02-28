@@ -3,7 +3,6 @@
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 
-from .embeddings import get_code_embedder, get_text_embedder
 from .vector_store import VectorStore
 
 
@@ -24,7 +23,7 @@ class SearchResult:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary"""
-        return {
+        d = {
             "score": round(self.score, 3),
             "file_path": self.file_path,
             "name": self.name,
@@ -33,6 +32,10 @@ class SearchResult:
             "language": self.language,
             "parent": self.parent,
         }
+        repo = self.metadata.get("repo")
+        if repo:
+            d["repo"] = repo
+        return d
 
     def __repr__(self):
         location = f"{self.file_path}:{self.start_line}"
@@ -45,8 +48,68 @@ class QueryInterface:
     def __init__(self, project_path: str):
         self.project_path = Path(project_path).resolve()
         self.vector_store = VectorStore(str(self.project_path))
-        self.code_embedder = get_code_embedder()
-        self.text_embedder = get_text_embedder()
+        self._code_embedder = None
+        self._text_embedder = None
+
+    @property
+    def code_embedder(self):
+        if self._code_embedder is None:
+            from .embeddings import get_code_embedder
+            self._code_embedder = get_code_embedder()
+        return self._code_embedder
+
+    @property
+    def text_embedder(self):
+        if self._text_embedder is None:
+            from .embeddings import get_text_embedder
+            self._text_embedder = get_text_embedder()
+        return self._text_embedder
+
+    def _lines_overlap(self, start1: int, end1: int, start2: int, end2: int) -> bool:
+        """Check if two line ranges overlap"""
+        return start1 <= end2 and start2 <= end1
+
+    def _deduplicate_results(self, results: List[SearchResult]) -> List[SearchResult]:
+        """Remove duplicate results from overlapping line ranges in the same file.
+
+        Keeps the higher-scored, more specific result. Specificity order:
+        function > class > file
+        """
+        if not results:
+            return results
+
+        # Specificity ranking (lower = more specific = preferred)
+        specificity = {"function": 0, "method": 0, "class": 1, "file": 2}
+
+        deduplicated = []
+        for result in results:
+            is_duplicate = False
+            for i, existing in enumerate(deduplicated):
+                if existing.file_path != result.file_path:
+                    continue
+                if not self._lines_overlap(
+                    existing.start_line, existing.end_line,
+                    result.start_line, result.end_line
+                ):
+                    continue
+
+                # Same file, overlapping lines — keep the better one
+                existing_spec = specificity.get(existing.type, 1)
+                result_spec = specificity.get(result.type, 1)
+
+                if result.score > existing.score or (
+                    result.score == existing.score and result_spec < existing_spec
+                ):
+                    # New result is better — replace existing
+                    deduplicated[i] = result
+
+                is_duplicate = True
+                break
+
+            if not is_duplicate:
+                deduplicated.append(result)
+
+        return deduplicated
 
     def _search_parallel(
         self,
@@ -65,7 +128,7 @@ class QueryInterface:
         ]
 
         results = []
-        
+
         with ThreadPoolExecutor(max_workers=3) as executor:
             future_to_collection = {
                 executor.submit(
@@ -87,21 +150,30 @@ class QueryInterface:
 
         # Sort by score and limit
         results.sort(key=lambda x: x["score"], reverse=True)
-        results = results[:limit]
+        search_results = [SearchResult(r["score"], r["metadata"]) for r in results]
 
-        return [SearchResult(r["score"], r["metadata"]) for r in results]
+        # Deduplicate overlapping results
+        search_results = self._deduplicate_results(search_results)
+
+        return search_results[:limit]
 
     def search_code(
         self,
         query: str,
         limit: int = 10,
         filters: Optional[Dict] = None,
-        threshold: float = 0.3
+        threshold: float = 0.3,
+        repo: Optional[str] = None
     ) -> List[SearchResult]:
         """Search for code using semantic similarity across multiple collections in parallel"""
-        # Generate query embedding
         query_vector = self.code_embedder.embed(query)[0]
-        return self._search_parallel(query_vector, limit, filters, threshold)
+
+        # Build filters
+        search_filters = dict(filters) if filters else {}
+        if repo:
+            search_filters["repo"] = repo
+
+        return self._search_parallel(query_vector, limit, search_filters or None, threshold)
 
     def search_documentation(
         self,
@@ -184,7 +256,8 @@ class QueryInterface:
         self,
         query: str,
         limit: int = 10,
-        threshold: float = 0.7
+        threshold: float = 0.7,
+        repo: Optional[str] = None
     ) -> List[SearchResult]:
         """Find similar code - accepts file path OR semantic query"""
         # Check if it's a file path
@@ -194,19 +267,19 @@ class QueryInterface:
 
         # Otherwise treat as semantic query
         query_vector = self.code_embedder.embed(query)[0]
-        
-        # Use parallel search
-        return self._search_parallel(query_vector, limit, threshold=threshold)
+        filters = {"repo": repo} if repo else None
+        return self._search_parallel(query_vector, limit, filters, threshold=threshold)
 
     def get_context_for_task(
         self,
         task_description: str,
         max_files: int = 10,
-        threshold: float = 0.4
+        threshold: float = 0.4,
+        repo: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Get relevant context files for a task"""
         # Search code
-        code_results = self.search_code(task_description, limit=max_files, threshold=threshold)
+        code_results = self.search_code(task_description, limit=max_files, threshold=threshold, repo=repo)
 
         # Search documentation
         doc_results = self.search_documentation(task_description, limit=max_files // 2, threshold=threshold)
@@ -234,7 +307,8 @@ class QueryInterface:
         self,
         query: str,
         depth: int = 2,
-        threshold: float = 0.6
+        threshold: float = 0.6,
+        repo: Optional[str] = None
     ) -> Dict[str, List[SearchResult]]:
         """Analyze impact - accepts file path OR semantic query"""
         # Check if it's a file path
@@ -242,7 +316,7 @@ class QueryInterface:
         is_file = path.exists() and path.is_file()
 
         # Find directly similar code
-        direct_results = self.find_similar(query, limit=20, threshold=threshold)
+        direct_results = self.find_similar(query, limit=20, threshold=threshold, repo=repo)
 
         if depth <= 1:
             return {"direct": direct_results, "indirect": [], "query_type": "file" if is_file else "semantic"}
@@ -284,7 +358,8 @@ class QueryInterface:
         limit: int = 10,
         threshold: float = 0.3,
         bm25_weight: float = 0.3,
-        semantic_weight: float = 0.7
+        semantic_weight: float = 0.7,
+        repo: Optional[str] = None
     ) -> List[SearchResult]:
         """Hybrid search combining BM25 keyword matching with semantic search
 
@@ -294,12 +369,13 @@ class QueryInterface:
             threshold: Minimum semantic similarity threshold
             bm25_weight: Weight for BM25 scores (0-1)
             semantic_weight: Weight for semantic scores (0-1)
+            repo: Filter by repository name
         """
         from rank_bm25 import BM25Okapi
         import numpy as np
 
         # Get semantic results (broader set for re-ranking)
-        semantic_results = self.search_code(query, limit=limit * 3, threshold=max(0.1, threshold - 0.2))
+        semantic_results = self.search_code(query, limit=limit * 3, threshold=max(0.1, threshold - 0.2), repo=repo)
 
         if not semantic_results:
             return []
@@ -336,6 +412,28 @@ class QueryInterface:
         filtered_results = [r for r in combined_results if r.score >= threshold]
 
         return filtered_results[:limit]
+
+    def search_git_history(
+        self,
+        query: str,
+        limit: int = 10,
+        threshold: float = 0.3,
+        repo: Optional[str] = None
+    ) -> List[SearchResult]:
+        """Search git commit history"""
+        query_vector = self.text_embedder.embed(query)[0]
+
+        filters = {"repo": repo} if repo else None
+
+        results = self.vector_store.search(
+            collection=VectorStore.GIT_HISTORY,
+            query_vector=query_vector,
+            limit=limit,
+            filters=filters,
+            score_threshold=threshold
+        )
+
+        return [SearchResult(r["score"], r["metadata"]) for r in results]
 
     def get_stats(self) -> Dict[str, Any]:
         """Get vector database statistics"""

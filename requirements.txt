@@ -13,5 +13,8 @@ qdrant-client>=1.7.0
 # Configuration
 python-dotenv>=1.0.0
 
+# MCP server
+mcp>=1.0.0
+
 # Optional: OpenAI embeddings (for faster indexing)
 openai>=1.0.0

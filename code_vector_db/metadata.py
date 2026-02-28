@@ -160,6 +160,43 @@ class ProjectMetadata:
         self.registry[project_id]["git_commits"][repo_name or "main"] = commit_hash
         self._save_registry()
 
+    def find_project_by_path(self, search_path: str) -> Optional[Dict[str, Any]]:
+        """Find a registered project whose path matches or contains the search path.
+
+        Checks:
+        1. Exact match on normalized path
+        2. search_path is inside a registered project path
+
+        Returns project info dict with 'project_id' key, or None.
+        """
+        abs_search = os.path.abspath(search_path).replace('\\', '/')
+
+        for project_id, info in self.registry.items():
+            registered_path = info.get("path", "").replace('\\', '/')
+            if abs_search == registered_path or abs_search.startswith(registered_path + '/'):
+                return {"project_id": project_id, **info}
+
+        return None
+
+    def get_file_hashes(self, project_path: str) -> Dict[str, str]:
+        """Get stored file content hashes for a project.
+
+        Returns:
+            Dict mapping file_path -> content_hash
+        """
+        info = self.get_project_info(project_path)
+        if not info:
+            return {}
+        return info.get("file_hashes", {})
+
+    def set_file_hashes(self, project_path: str, hashes: Dict[str, str]):
+        """Store file content hashes for a project"""
+        project_id = self.get_project_id(project_path)
+        if project_id not in self.registry:
+            return
+        self.registry[project_id]["file_hashes"] = hashes
+        self._save_registry()
+
     def cleanup_missing_projects(self) -> List[str]:
         """Remove projects whose paths no longer exist"""
         removed = []

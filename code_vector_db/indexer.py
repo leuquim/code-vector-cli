@@ -273,6 +273,26 @@ class CodebaseIndexer:
             collection_stats=collection_stats
         )
 
+        # Store current HEAD commit for incremental diff
+        if self.repos:
+            repo = self.repos[0]
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=repo['path'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    self.metadata.set_last_indexed_commit(
+                        str(self.workspace_root),
+                        repo['name'],
+                        result.stdout.strip()
+                    )
+            except Exception:
+                pass
+
         print("\n[OK] Indexing complete!")
 
     def _index_multi_repo(self, incremental: bool = False, repo_filter: str = None):
@@ -378,45 +398,166 @@ class CodebaseIndexer:
             file_count=total_files,
             collection_stats=collection_stats
         )
+
+        # Store current HEAD commits for incremental diff
+        for repo_info in self.repos:
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=repo_info['path'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    self.metadata.set_last_indexed_commit(
+                        str(self.workspace_root),
+                        repo_info['name'],
+                        result.stdout.strip()
+                    )
+            except Exception:
+                pass
+
         print(f"\n[OK] Registered workspace in metadata: {self.project_path}")
 
     def _filter_changed_files(self, files: List[Path]) -> List[Path]:
-        """Filter files to only those changed since last index"""
+        """Filter files to only those changed since last index.
+
+        Uses 3-tier detection strategy:
+        1. git diff (most accurate, fast)
+        2. Content hash comparison (accurate, medium speed)
+        3. mtime comparison (fast, less accurate - fallback)
+        """
         import hashlib
 
-        # Get last index time from metadata
-        # Always use workspace root, even when temporarily indexing sub-repos
-        last_indexed = self.metadata.get_last_indexed_time(str(self.workspace_root))
+        workspace_path = str(self.workspace_root)
 
+        # Tier 1: Try git diff for changed files
+        git_changed = self._get_git_changed_files()
+        if git_changed is not None:
+            # git diff succeeded — use it as primary filter
+            git_changed_abs = set()
+            for rel_path in git_changed:
+                abs_path = (self.workspace_root / rel_path).resolve()
+                git_changed_abs.add(abs_path)
+
+            changed = [f for f in files if f.resolve() in git_changed_abs]
+            if changed:
+                print(f"  Git diff detected {len(changed)} changed files")
+                return changed
+            # If git diff returned no matches, fall through to hash check
+
+        # Tier 2: Content hash comparison
+        stored_hashes = self.metadata.get_file_hashes(workspace_path)
+        if stored_hashes:
+            changed = []
+            for file_path in files:
+                try:
+                    rel_path = str(file_path.relative_to(self.workspace_root)).replace('\\', '/')
+                    content = file_path.read_text(errors='ignore')
+                    current_hash = hashlib.md5(content.encode()).hexdigest()
+
+                    if rel_path not in stored_hashes or stored_hashes[rel_path] != current_hash:
+                        changed.append(file_path)
+                except Exception:
+                    changed.append(file_path)
+
+            if len(changed) < len(files):
+                print(f"  Hash comparison: {len(changed)} changed out of {len(files)} files")
+                return changed
+
+        # Tier 3: mtime comparison (original fallback)
+        last_indexed = self.metadata.get_last_indexed_time(workspace_path)
         if not last_indexed:
-            # Never indexed before, return all files
             return files
 
-        changed_files = []
+        changed = []
+        for file_path in files:
+            try:
+                mtime = os.path.getmtime(file_path)
+                if mtime > last_indexed:
+                    changed.append(file_path)
+            except Exception:
+                changed.append(file_path)
+
+        return changed
+
+    def _get_git_changed_files(self) -> Optional[Set[str]]:
+        """Get files changed since last indexed commit using git diff.
+
+        Returns set of relative file paths, or None if git diff unavailable.
+        """
+        changed = set()
+
+        for repo_info in self.repos:
+            repo_name = repo_info['name']
+            repo_path = repo_info['path']
+
+            last_commit = self.metadata.get_last_indexed_commit(
+                str(self.workspace_root), repo_name
+            )
+            if not last_commit:
+                return None  # No baseline commit — can't diff
+
+            try:
+                result = subprocess.run(
+                    ["git", "diff", "--name-only", last_commit, "HEAD"],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+                if result.returncode != 0:
+                    return None
+
+                for line in result.stdout.strip().split('\n'):
+                    line = line.strip()
+                    if line:
+                        if repo_info.get('is_root'):
+                            changed.add(line)
+                        else:
+                            changed.add(f"{repo_name}/{line}")
+            except Exception:
+                return None
+
+        return changed
+
+    def _detect_deleted_files(self) -> List[str]:
+        """Detect files that were indexed but no longer exist.
+
+        Returns list of relative file paths to remove from index.
+        """
+        workspace_path = str(self.workspace_root)
+        stored_hashes = self.metadata.get_file_hashes(workspace_path)
+
+        if not stored_hashes:
+            return []
+
+        deleted = []
+        for rel_path in stored_hashes:
+            abs_path = self.workspace_root / rel_path
+            if not abs_path.exists():
+                deleted.append(rel_path)
+
+        return deleted
+
+    def _update_file_hashes(self, files: List[Path]):
+        """Update stored file hashes after indexing"""
+        import hashlib
+
+        workspace_path = str(self.workspace_root)
+        hashes = self.metadata.get_file_hashes(workspace_path)
 
         for file_path in files:
             try:
-                # Check modification time first (fast)
-                mtime = os.path.getmtime(file_path)
-                if mtime > last_indexed:
-                    # File modified since last index
-                    changed_files.append(file_path)
-                    continue
-
-                # For files with same mtime, check content hash
-                # (catches cases where file was restored to same mtime)
+                rel_path = str(file_path.relative_to(self.workspace_root)).replace('\\', '/')
                 content = file_path.read_text(errors='ignore')
-                content_hash = hashlib.md5(content.encode()).hexdigest()
-
-                # Query vector DB to see if this file exists with different hash
-                # This is expensive, so only do it for files with matching mtime
-                # For simplicity, we'll skip this check and rely on mtime
-
+                hashes[rel_path] = hashlib.md5(content.encode()).hexdigest()
             except Exception:
-                # If we can't check, include it to be safe
-                changed_files.append(file_path)
+                pass
 
-        return changed_files
+        self.metadata.set_file_hashes(workspace_path, hashes)
 
     def _index_code_files(self, files: List[Path], incremental: bool):
         """Index code files with parallel processing and batched embedding"""
@@ -510,6 +651,17 @@ class CodebaseIndexer:
             self._progress_callback(len(files), len(files))
 
         print(f"  Indexed {total_chunks} code chunks")
+
+        # Update file hashes for incremental detection
+        self._update_file_hashes(files)
+
+        # Handle deleted files
+        deleted = self._detect_deleted_files()
+        if deleted:
+            print(f"  Removing {len(deleted)} deleted files from index...")
+            for rel_path in deleted:
+                for collection in [VectorStore.CODE_FUNCTIONS, VectorStore.CODE_CLASSES, VectorStore.CODE_FILES]:
+                    self.vector_store.delete_by_file(collection, rel_path)
 
     def _store_code_chunks(self, chunks: List[CodeChunk], collection: str):
         """Generate embeddings and store code chunks"""
@@ -648,3 +800,143 @@ class CodebaseIndexer:
             self._index_documentation([path], incremental=False)
         elif self.ast_chunker.get_language(str(path)):
             self._index_code_files([path], incremental=False)
+
+    def index_git_history(self, max_commits: int = 500):
+        """Index git commit history for all repositories.
+
+        Creates searchable vectors from commit messages and changed files.
+        Stores in the git_history collection.
+        """
+        if not self.repos:
+            print("No git repositories found to index")
+            return
+
+        total_indexed = 0
+
+        for repo_info in self.repos:
+            repo_name = repo_info['name']
+            repo_path = repo_info['path']
+
+            print(f"\nIndexing git history for: {repo_name}")
+
+            commits = self._parse_git_log(repo_path, max_commits)
+            if not commits:
+                print(f"  No commits found")
+                continue
+
+            print(f"  Found {len(commits)} commits")
+
+            # Build text for embedding
+            texts = []
+            for commit in commits:
+                files_str = "\n".join(commit["files_changed"][:20])
+                text = f"{commit['message']}\n\nFiles changed:\n{files_str}"
+                texts.append(text)
+
+            # Generate embeddings using text embedder (commit messages are natural language)
+            print(f"  Generating embeddings...")
+            embeddings = self.text_embedder.embed(texts)
+
+            # Prepare points
+            points = []
+            for commit, embedding in zip(commits, embeddings):
+                file_path_str = ", ".join(commit["files_changed"][:10])
+                metadata = {
+                    "file_path": file_path_str,
+                    "type": "commit",
+                    "name": commit["hash"][:8],
+                    "content": commit["message"],
+                    "start_line": 0,
+                    "end_line": 0,
+                    "parent": "",
+                    "language": "",
+                    "content_hash": commit["hash"],
+                    "repo": repo_name,
+                    "commit_hash": commit["hash"],
+                    "author": commit["author"],
+                    "date": commit["date"],
+                    "message": commit["message"],
+                    "files_changed": commit["files_changed"]
+                }
+
+                points.append({
+                    "id": commit["hash"],
+                    "vector": embedding,
+                    "metadata": metadata
+                })
+
+            # Store in git_history collection
+            if points:
+                self.vector_store.upsert_points(VectorStore.GIT_HISTORY, points)
+                total_indexed += len(points)
+                print(f"  Indexed {len(points)} commits")
+
+        print(f"\n[OK] Git history indexing complete! Total: {total_indexed} commits")
+
+    def _parse_git_log(self, repo_path: Path, max_commits: int = 500) -> List[Dict]:
+        """Parse git log output into structured commit data"""
+        COMMIT_SEP = "---COMMIT_SEP---"
+
+        try:
+            result = subprocess.run(
+                [
+                    "git", "log",
+                    f"--format={COMMIT_SEP}%n%H%n%an%n%aI%n%s",
+                    "--name-only",
+                    f"-{max_commits}"
+                ],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+
+            if result.returncode != 0:
+                print(f"  Warning: git log failed: {result.stderr.strip()}")
+                return []
+
+            output = result.stdout.strip()
+            if not output:
+                return []
+
+            commits = []
+            raw_commits = output.split(COMMIT_SEP)
+
+            for raw in raw_commits:
+                raw = raw.strip()
+                if not raw:
+                    continue
+
+                lines = raw.split('\n')
+                if len(lines) < 4:
+                    continue
+
+                commit_hash = lines[0].strip()
+                author = lines[1].strip()
+                date = lines[2].strip()
+                message = lines[3].strip()
+
+                # Remaining lines are file names (after empty line separator)
+                files_changed = []
+                for line in lines[4:]:
+                    line = line.strip()
+                    if line:
+                        files_changed.append(line)
+
+                if commit_hash and message:
+                    commits.append({
+                        "hash": commit_hash,
+                        "author": author,
+                        "date": date,
+                        "message": message,
+                        "files_changed": files_changed
+                    })
+
+            return commits
+
+        except subprocess.TimeoutExpired:
+            print(f"  Warning: git log timed out for {repo_path}")
+            return []
+        except Exception as e:
+            print(f"  Warning: git log failed for {repo_path}: {e}")
+            return []
