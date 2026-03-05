@@ -26,6 +26,7 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 - [Architecture](#architecture)
 - [Supported Languages](#supported-languages)
 - [Claude Code Integration](#claude-code-integration)
+  - [MCP Server](#mcp-server)
   - [Conversation Indexing](#conversation-indexing)
   - [Claude Code Skill](#claude-code-skill)
 - [Development](#development)
@@ -283,8 +284,14 @@ code-vector-cli impact "src/models/user.py"
 ### Documentation & History Search
 
 ```bash
-# Search documentation
+# Search documentation (markdown, config files)
 code-vector-cli search-docs "api setup"
+
+# Index git commit history
+code-vector-cli index-git
+
+# Search git commits by message or diff content
+code-vector-cli search-git "authentication refactor"
 
 # Index conversation transcripts (one-time setup)
 code-vector-cli migrate-conversations
@@ -365,6 +372,54 @@ Additional languages can be added by configuring Tree-sitter grammars in `ast_ch
 ## Claude Code Integration
 
 This tool was designed to work seamlessly with [Claude Code](https://claude.ai/code), Anthropic's AI coding assistant, though it works standalone as well.
+
+There are two integration modes:
+
+| Mode | Best for |
+|------|----------|
+| **MCP Server** | AI-driven search — Claude calls tools directly, no CLI needed |
+| **CLI + Skill** | Human-driven search, scripting, CI, maintenance tasks |
+
+### MCP Server
+
+The MCP (Model Context Protocol) server exposes all search capabilities as tools that Claude can call directly during a conversation — no manual CLI invocation needed.
+
+**Starting the server:**
+
+```bash
+code-vector-cli mcp serve --path /path/to/your/project
+```
+
+**Configuring in Claude Code** (`.mcp.json` in your project root):
+
+```json
+{
+  "mcpServers": {
+    "code-vector": {
+      "command": "code-vector-cli",
+      "args": ["mcp", "serve", "--path", "/path/to/your/project"]
+    }
+  }
+}
+```
+
+**Available MCP tools:**
+
+| Tool | Description |
+|------|-------------|
+| `semantic_search` | Find code by natural language description |
+| `hybrid_search` | Semantic + BM25 keyword matching (best for identifiers) |
+| `find_similar` | Find duplicate or related code patterns |
+| `get_context` | Get relevant files for a task or feature |
+| `analyze_impact` | Find code affected by a change before refactoring |
+| `search_docs` | Search project documentation |
+| `get_stats` | View index statistics |
+
+All tools accept a `repo` parameter to filter results by repository in multi-repo workspaces.
+
+**When to use `semantic_search` vs `hybrid_search`:**
+- Use `semantic_search` for conceptual queries: `"user authentication logic"`, `"error handling middleware"`
+- Use `hybrid_search` when you know specific names: `"UpdatePausedTimeResource"`, `"handleCheckout function"`
 
 ### Conversation Indexing
 
@@ -465,6 +520,8 @@ code-vector-cli index /path/to/project
 code-vector-cli/
 ├── code_vector_db/
 │   ├── __init__.py
+│   ├── cli.py                 # CLI entry point and command definitions
+│   ├── mcp_server.py          # MCP server (7 search tools via stdio)
 │   ├── embeddings.py          # Embedding models (local + OpenAI)
 │   ├── vector_store.py        # Qdrant operations
 │   ├── indexer.py             # Main indexing logic
@@ -473,7 +530,7 @@ code-vector-cli/
 │   ├── query.py               # Search interface
 │   └── metadata.py            # Project tracking
 ├── bin/
-│   └── code-vector-cli        # CLI entry point
+│   └── code-vector-cli        # Shell wrapper
 ├── setup.py
 ├── requirements.txt
 └── README.md
@@ -506,9 +563,10 @@ Contributions welcome! Please:
 - [x] Context selection for tasks ✅
 - [x] Similarity search ✅
 - [x] Hybrid search (vector + BM25 keyword) ✅
-- [ ] Support for documentation (Markdown, RST)
-- [ ] Git history indexing (commit messages, diffs)
-- [ ] Conversation history indexing (chat logs)
+- [x] MCP server (Claude Code and Claude Desktop integration) ✅
+- [x] Documentation search (Markdown, config files) ✅
+- [x] Git history indexing (commit messages, diffs) ✅
+- [x] Conversation history indexing (Claude Code chat logs) ✅
 - [ ] VSCode extension
 - [ ] Language server protocol (LSP) integration
 - [ ] More language support (Ruby, C++, C#)
