@@ -36,6 +36,8 @@ setup(
         "tree-sitter-languages>=1.10.0",
         "qdrant-client>=1.7.0",
         "python-dotenv>=1.0.0",
+        "mcp>=1.0.0",
+        "rank_bm25>=0.2.2",
         "openai>=1.0.0",
     ],
     extras_require={

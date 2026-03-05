@@ -16,5 +16,8 @@ python-dotenv>=1.0.0
 # MCP server
 mcp>=1.0.0
 
+# Hybrid search (BM25 ranking)
+rank_bm25>=0.2.2
+
 # Optional: OpenAI embeddings (for faster indexing)
 openai>=1.0.0
