@@ -273,13 +273,13 @@ class VectorStore:
                 info = self.client.get_collection(collection_name)
                 stats["collections"][collection] = {
                     "points_count": info.points_count,
-                    "vectors_count": info.vectors_count,
+                    "indexed_vectors_count": info.indexed_vectors_count,
                 }
             except Exception:
                 # Collection doesn't exist yet
                 stats["collections"][collection] = {
                     "points_count": 0,
-                    "vectors_count": 0,
+                    "indexed_vectors_count": 0,
                 }
 
         return stats
