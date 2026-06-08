@@ -647,6 +647,25 @@ def cmd_list_projects(args):
         print("\nRun: code-vector-cli cleanup-metadata")
 
 
+def cmd_is_indexed(args):
+    """Exit 0 if the project at --path is already indexed, else exit 1.
+
+    Metadata-only (no Qdrant connection), so it's cheap to call from a hook to
+    decide whether to incrementally re-index. With --quiet, prints nothing.
+    """
+    import sys
+    metadata = ProjectMetadata()
+    info = metadata.get_project_info(args.project_path)
+    indexed = info is not None
+    if not getattr(args, "quiet", False):
+        if indexed:
+            print(f"indexed (files: {info.get('file_count', '?')}, "
+                  f"last_updated: {info.get('last_updated', '?')})")
+        else:
+            print("not indexed")
+    sys.exit(0 if indexed else 1)
+
+
 def cmd_cleanup_metadata(args):
     """Clean up metadata for projects that no longer exist"""
     metadata = ProjectMetadata()
@@ -912,6 +931,12 @@ def main():
     list_parser = subparsers.add_parser("list-projects", help="List all indexed projects")
     list_parser.add_argument("-v", "--verbose", action="store_true", help="Show detailed stats")
 
+    # is-indexed command (cheap check for hooks: exit 0 if indexed, 1 if not)
+    is_indexed_parser = subparsers.add_parser(
+        "is-indexed", help="Exit 0 if project is indexed, 1 if not (for hooks/scripts)")
+    _add_path_arg(is_indexed_parser)
+    is_indexed_parser.add_argument("-q", "--quiet", action="store_true", help="Print nothing; use exit code only")
+
     # cleanup-metadata command
     subparsers.add_parser("cleanup-metadata", help="Clean up metadata for missing projects")
 
@@ -974,6 +999,7 @@ def main():
         "install-hook": cmd_install_hook,
         "migrate-conversations": cmd_migrate_conversations,
         "list-projects": cmd_list_projects,
+        "is-indexed": cmd_is_indexed,
         "cleanup-metadata": cmd_cleanup_metadata,
         "delete": cmd_delete,
         "index-git": cmd_index_git,

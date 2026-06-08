@@ -693,6 +693,14 @@ class CodebaseIndexer:
 
     def _index_documentation(self, files: List[Path], incremental: bool):
         """Index documentation files"""
+        # Skip unchanged docs on incremental runs (was re-embedding all docs
+        # every run, making a "no change" incremental needlessly expensive).
+        if incremental:
+            files = self._filter_changed_files(files)
+            if not files:
+                print("  No documentation changed since last index")
+                return
+
         points = []
 
         for file_path in files:
@@ -736,8 +744,18 @@ class CodebaseIndexer:
             self.vector_store.upsert_points(VectorStore.DOCUMENTATION, points)
             print(f"  Indexed {len(points)} documentation files")
 
+        # Record hashes so the next incremental run can skip unchanged docs.
+        self._update_file_hashes(files)
+
     def _index_configuration(self, files: List[Path], incremental: bool):
         """Index configuration files"""
+        # Skip unchanged config on incremental runs (same fix as documentation).
+        if incremental:
+            files = self._filter_changed_files(files)
+            if not files:
+                print("  No configuration changed since last index")
+                return
+
         points = []
 
         for file_path in files:
@@ -780,6 +798,9 @@ class CodebaseIndexer:
         if points:
             self.vector_store.upsert_points(VectorStore.DOCUMENTATION, points)
             print(f"  Indexed {len(points)} configuration files")
+
+        # Record hashes so the next incremental run can skip unchanged config.
+        self._update_file_hashes(files)
 
     def reindex_file(self, file_path: str):
         """Reindex a single file (force reindex, ignoring change detection)"""
