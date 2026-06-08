@@ -37,7 +37,7 @@ setup(
         "tree-sitter>=0.22.0",
         "tree-sitter-language-pack>=1.0.0",
         # Vector DB + hybrid search + plumbing
-        "qdrant-client>=1.7.0",
+        "qdrant-client>=1.12.0",
         "bm25s>=0.2.0",
         "python-dotenv>=1.0.0",
         "mcp>=1.0.0",

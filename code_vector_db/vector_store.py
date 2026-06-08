@@ -70,7 +70,10 @@ class VectorStore:
             prefer_grpc = os.environ.get("QDRANT_PREFER_GRPC", "true").lower() == "true"
             grpc_port = int(os.environ.get("QDRANT_GRPC_PORT", 0)) or None
 
-            client_kwargs = {"host": host, "timeout": 300}
+            # check_compatibility=False: the client/server minor-version check
+            # emits a noisy UserWarning whenever the server drifts >1 minor ahead.
+            # We track a compatible client in requirements; skip the runtime check.
+            client_kwargs = {"host": host, "timeout": 300, "check_compatibility": False}
             if prefer_grpc:
                 client_kwargs["prefer_grpc"] = True
                 client_kwargs["grpc_port"] = grpc_port or (port + 1)
