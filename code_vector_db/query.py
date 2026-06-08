@@ -278,8 +278,16 @@ class QueryInterface:
             VectorStore.CODE_FILES
         ]
 
-        # Widen the pool when we'll rerank (more candidates -> better top-N).
-        pool_limit = max(limit, 30) if (query_text and rerank_enabled()) else limit
+        # Widen the pool when we'll rerank so the cross-encoder has real choices,
+        # but not so wide that rerank latency balloons. Empirically ~15-20 per
+        # collection (~35-45 candidates) gives the same top-N as ~30 per
+        # collection at roughly a third of the rerank cost. Tunable via env.
+        if query_text and rerank_enabled():
+            import os
+            per_coll = int(os.environ.get("RERANK_POOL_PER_COLLECTION", 0)) or min(max(limit * 2, 15), 25)
+            pool_limit = per_coll
+        else:
+            pool_limit = limit
 
         results = []
 
