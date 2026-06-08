@@ -113,7 +113,14 @@ def _format_search_result(result, index, args, base_path=None):
     line_range = f"{result.start_line}-{result.end_line}" if result.end_line > result.start_line else str(result.start_line)
     lang_suffix = f" [{result.language}]" if result.language else ""
 
-    print(f"{index}. [{result.score:.3f}] {repo_prefix}{result.file_path}:{line_range}{lang_suffix}")
+    # When a reranker ordered the list, show its score (the one driving the
+    # order) alongside the raw vector similarity, so the ordering reads correctly.
+    if getattr(result, "rerank_score", None) is not None:
+        score_str = f"rank {result.rerank_score:.3f} | sim {result.score:.3f}"
+    else:
+        score_str = f"{result.score:.3f}"
+
+    print(f"{index}. [{score_str}] {repo_prefix}{result.file_path}:{line_range}{lang_suffix}")
 
     if result.name:
         print(f"   {result.type}: {result.name}")
@@ -240,7 +247,12 @@ def cmd_similar(args):
         # Show language if available
         lang_suffix = f" [{result.language}]" if result.language else ""
 
-        print(f"{i}. [{result.score:.3f}] {repo_prefix}{result.file_path}:{line_range}{lang_suffix}")
+        if getattr(result, "rerank_score", None) is not None:
+            score_str = f"rank {result.rerank_score:.3f} | sim {result.score:.3f}"
+        else:
+            score_str = f"{result.score:.3f}"
+
+        print(f"{i}. [{score_str}] {repo_prefix}{result.file_path}:{line_range}{lang_suffix}")
 
         # Show type and name
         if result.name:
