@@ -104,6 +104,8 @@ pip install -e .
 
 **Note:** All commands default to the current working directory. Use `--path /path/to/project` to specify a different location.
 
+**Short alias:** `cvc` is installed as an alias for `code-vector-cli` - e.g. `cvc search "auth logic"`. All examples below work with either name.
+
 ### 1. Index Your Codebase
 
 ```bash

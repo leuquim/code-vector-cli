@@ -59,6 +59,7 @@ setup(
     entry_points={
         "console_scripts": [
             "code-vector-cli=code_vector_db.cli:main",
+            "cvc=code_vector_db.cli:main",  # short alias
         ],
     },
     include_package_data=True,
