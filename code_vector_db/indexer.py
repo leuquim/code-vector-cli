@@ -27,7 +27,7 @@ def _process_file_worker(file_info: Tuple[Path, Path]) -> Optional[Tuple[List, L
     file_path, project_path = file_info
 
     try:
-        content = file_path.read_text(errors='ignore')
+        content = file_path.read_text(encoding='utf-8', errors='replace')
         # Normalize path separators for cross-platform compatibility
         rel_path = str(file_path.relative_to(project_path)).replace('\\', '/')
 
@@ -454,7 +454,7 @@ class CodebaseIndexer:
             for file_path in files:
                 try:
                     rel_path = str(file_path.relative_to(self.workspace_root)).replace('\\', '/')
-                    content = file_path.read_text(errors='ignore')
+                    content = file_path.read_text(encoding='utf-8', errors='replace')
                     current_hash = hashlib.md5(content.encode()).hexdigest()
 
                     if rel_path not in stored_hashes or stored_hashes[rel_path] != current_hash:
@@ -552,7 +552,7 @@ class CodebaseIndexer:
         for file_path in files:
             try:
                 rel_path = str(file_path.relative_to(self.workspace_root)).replace('\\', '/')
-                content = file_path.read_text(errors='ignore')
+                content = file_path.read_text(encoding='utf-8', errors='replace')
                 hashes[rel_path] = hashlib.md5(content.encode()).hexdigest()
             except Exception:
                 pass
@@ -697,7 +697,7 @@ class CodebaseIndexer:
 
         for file_path in files:
             try:
-                content = file_path.read_text(errors='ignore')
+                content = file_path.read_text(encoding='utf-8', errors='replace')
                 # Normalize path separators for cross-platform compatibility
                 rel_path = str(file_path.relative_to(self.project_path)).replace('\\', '/')
 
@@ -742,7 +742,7 @@ class CodebaseIndexer:
 
         for file_path in files:
             try:
-                content = file_path.read_text(errors='ignore')
+                content = file_path.read_text(encoding='utf-8', errors='replace')
                 # Normalize path separators for cross-platform compatibility
                 rel_path = str(file_path.relative_to(self.project_path)).replace('\\', '/')
 

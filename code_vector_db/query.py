@@ -22,19 +22,86 @@ class SearchResult:
         self.content = metadata.get("content", "")
         self.metadata = metadata
 
+    # Bounded snippet size: enough to triage a result in one call without
+    # flooding the agent's context on a multi-result search.
+    SNIPPET_MAX_LINES = 20
+    SNIPPET_MAX_CHARS = 1500
+
+    def _signature(self) -> str:
+        """Best-effort signature: the declaration line(s) up to the body start."""
+        if not self.content:
+            return ""
+        sig_lines = []
+        for line in self.content.splitlines():
+            sig_lines.append(line)
+            # Stop at the first body opener so we keep just the declaration.
+            if "{" in line or line.rstrip().endswith(":") or line.rstrip().endswith("=>"):
+                break
+            if len(sig_lines) >= 4:  # guard against runaway multi-line headers
+                break
+        sig = "\n".join(sig_lines).strip()
+        return sig[:300]
+
+    def _snippet(self) -> str:
+        """A bounded code snippet for one-call triage (full body via `lines`)."""
+        if not self.content:
+            return ""
+        lines = self.content.splitlines()
+        snippet = "\n".join(lines[:self.SNIPPET_MAX_LINES])
+        if len(snippet) > self.SNIPPET_MAX_CHARS:
+            snippet = snippet[:self.SNIPPET_MAX_CHARS]
+        truncated = len(lines) > self.SNIPPET_MAX_LINES or len(snippet) >= self.SNIPPET_MAX_CHARS
+        return snippet + ("\n  ... (truncated, read full range for more)" if truncated else "")
+
+    def _kind(self) -> str:
+        """Classify a result as source vs test vs docs from its path.
+
+        Lets an agent prioritize implementation over tests without reading files.
+        """
+        p = self.file_path.lower().replace("\\", "/")
+        if self.type in ("documentation", "configuration"):
+            return self.type
+        if "/test" in p or p.startswith("test") or ".test." in p or ".spec." in p or "tests/" in p:
+            return "test"
+        return "source"
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary"""
+        """Convert to a result shape optimized for AI agent consumption.
+
+        - Single `relevance` score (rerank when present, else vector similarity)
+          so the agent never has to guess which score ordered the list.
+        - `signature` + bounded `code` snippet so an agent can triage in one call
+          instead of issuing a follow-up read per result.
+        - `kind` (source/test/...) to prioritize implementation over tests.
+        - Empty fields are omitted to keep responses lean.
+        """
+        relevance = self.rerank_score if self.rerank_score is not None else self.score
+
         d = {
-            "score": round(self.score, 3),
+            "relevance": round(relevance, 3),
             "file_path": self.file_path,
-            "name": self.name,
-            "type": self.type,
             "lines": f"{self.start_line}-{self.end_line}",
-            "language": self.language,
-            "parent": self.parent,
+            "type": self.type,
         }
-        if self.rerank_score is not None:
-            d["rerank_score"] = round(self.rerank_score, 3)
+        if self.name:
+            d["name"] = self.name
+        if self.parent:
+            d["parent"] = self.parent
+        if self.language:
+            d["language"] = self.language
+
+        kind = self._kind()
+        if kind != "source":
+            d["kind"] = kind
+
+        sig = self._signature()
+        if sig:
+            d["signature"] = sig
+
+        snippet = self._snippet()
+        if snippet:
+            d["code"] = snippet
+
         repo = self.metadata.get("repo")
         if repo:
             d["repo"] = repo
@@ -310,7 +377,7 @@ class QueryInterface:
 
         # Read file content
         try:
-            content = path.read_text(errors='ignore')
+            content = path.read_text(encoding='utf-8', errors='replace')
         except (IOError, OSError) as e:
             print(f"Warning: Could not read file {file_path}: {e}")
             return []

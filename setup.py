@@ -34,7 +34,7 @@ setup(
         "zeroentropy>=0.1.0a1",
         "openai>=1.0.0",
         # AST parsing (maintained successor to tree-sitter-languages)
-        "tree-sitter>=0.22.0",
+        "tree-sitter>=0.25.2",
         "tree-sitter-language-pack>=1.0.0",
         # Vector DB + hybrid search + plumbing
         "qdrant-client>=1.12.0",

@@ -3,7 +3,8 @@
 import hashlib
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
-from tree_sitter_language_pack import get_language, get_parser
+from tree_sitter import Parser
+from tree_sitter_language_pack import get_language
 
 
 class CodeChunk:
@@ -154,12 +155,19 @@ class ASTChunker:
         return self.LANGUAGE_MAP.get(suffix)
 
     def get_parser(self, language: str):
-        """Get or create parser for language"""
+        """Get or create parser for language.
+
+        Construct Parser(Language) directly rather than using the language
+        pack's get_parser() helper: on tree-sitter >= 0.25 that helper returns
+        a parser whose .parse() rejects bytes ("'bytes' object is not an
+        instance of 'str'"), while a directly-built Parser works correctly.
+        """
         if language not in self.parsers:
             try:
-                self.languages[language] = get_language(language)
-                self.parsers[language] = get_parser(language)
-            except Exception as e:
+                lang = get_language(language)
+                self.languages[language] = lang
+                self.parsers[language] = Parser(lang)
+            except Exception:
                 return None
         return self.parsers[language]
 
