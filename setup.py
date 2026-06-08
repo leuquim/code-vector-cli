@@ -27,20 +27,28 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     install_requires=[
-        "torch>=2.0.0",
-        "sentence-transformers>=2.2.0",
-        "transformers>=4.30.0",
-        "tree-sitter>=0.20.0,<0.21",
-        "tree-sitter-languages>=1.10.0",
+        # Cloud-first default: zembed-1 embeddings + zerank-1 rerank
+        # (only pre-release published; >=0.1.0a1 opts into accepting it)
+        "zeroentropy>=0.1.0a1",
+        "openai>=1.0.0",
+        # AST parsing (maintained successor to tree-sitter-languages)
+        "tree-sitter>=0.22.0",
+        "tree-sitter-language-pack>=1.0.0",
+        # Vector DB + hybrid search + plumbing
         "qdrant-client>=1.7.0",
+        "bm25s>=0.2.0",
         "python-dotenv>=1.0.0",
         "mcp>=1.0.0",
-        "rank_bm25>=0.2.2",
-        "openai>=1.0.0",
     ],
     extras_require={
+        # Offline local embeddings (no API key); pulls heavy ML deps.
+        "local": [
+            "torch>=2.0.0",
+            "transformers>=4.30.0",
+            "sentence-transformers>=2.2.0",
+        ],
         "dev": [
             "pytest>=7.0.0",
             "black>=23.0.0",

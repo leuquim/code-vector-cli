@@ -14,8 +14,10 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
   - [Install Code Vector CLI](#install-code-vector-cli)
 - [Quick Start](#quick-start)
 - [Configuration](#configuration)
-  - [Using OpenAI Embeddings](#using-openai-embeddings-faster-requires-api-key)
-  - [Using Local Embeddings](#using-local-embeddings-free-no-api-key-needed)
+  - [Default: zembed-1 + zerank-1](#default-zembed-1--zerank-1-cloud-recommended)
+  - [OpenAI embeddings](#openai-embeddings)
+  - [Local embeddings](#local-embeddings-offline-no-api-key)
+  - [Qdrant connection](#qdrant-connection)
   - [Windows Configuration](#windows-configuration)
 - [Usage](#usage)
   - [Indexing Commands](#indexing-commands)
@@ -38,11 +40,14 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 ## Features
 
 - **Semantic Code Search**: Find code by meaning, not just keywords
-- **Hybrid Search**: Combine semantic understanding with BM25 keyword matching for best results
+- **Cross-Encoder Reranking**: A zerank-1 rerank stage reorders results for precision (the single biggest quality lever)
+- **Hybrid Search**: Fuse semantic similarity with BM25 keyword matching, then rerank
+- **Code + Text in One Model**: zembed-1 embeds both code and prose, so a single embedding space covers functions, docs, and commits
 - **Incremental Indexing**: Smart file change detection - only reindex modified files
 - **Multi-Repository Support**: Index entire workspaces with multiple projects
-- **AST-Aware Chunking**: Intelligently splits code at function/class boundaries using Tree-sitter
-- **Fast Local or Cloud Embeddings**: Choose between local models (CodeT5+, mpnet) or OpenAI embeddings
+- **AST-Aware Chunking**: Intelligently splits code at function/class boundaries using Tree-sitter (Python, JS/TS, C#, Go, Rust, Java, PHP, and more)
+- **Cloud or Local Embeddings**: zembed-1 (default) or OpenAI by API, or fully offline local models
+- **Contextual Retrieval**: Each chunk is embedded with its path/class/signature header so location is captured, not just the body
 - **Qdrant Vector Database**: High-performance vector storage with collections for functions, classes, and files
 - **Cross-Repo Search**: Search across all indexed repositories simultaneously
 - **Impact Analysis**: Analyze dependencies and find code affected by changes
@@ -54,9 +59,10 @@ A fast, local semantic code search tool powered by vector embeddings. Index your
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.9+
 - [Qdrant](https://qdrant.tech/) vector database running locally (or remote)
 - Git (for multi-repo workspace detection)
+- A ZeroEntropy API key for the default cloud embeddings ([free tier](https://www.zeroentropy.dev/)), or use `[local]` for offline
 
 ### Install Qdrant
 
@@ -131,43 +137,57 @@ code-vector-cli stats
 
 ## Configuration
 
-### Using OpenAI Embeddings (Faster, Requires API Key)
+All configuration lives in `~/.code-vector-db.env`. The embedding provider is a
+single choice: `zeroentropy` (default), `openai`, or `local`.
 
-For better performance on large codebases, you can use OpenAI embeddings:
+> Switching provider, model, or dimension changes the vector size. Collections
+> are fixed-size at creation, so after a switch you must `delete --force` and
+> reindex. The tool detects a mismatch and tells you this rather than corrupting
+> search silently.
+
+### Default: zembed-1 + zerank-1 (cloud, recommended)
+
+zembed-1 embeds both code and text in one model; zerank-1 reranks results for
+precision. Get a key at [zeroentropy.dev](https://www.zeroentropy.dev/) (free tier available).
 
 ```bash
-# Create ~/.code-vector-db.env
-echo "USE_OPENAI_EMBEDDINGS=true" >> ~/.code-vector-db.env
-echo "OPENAI_API_KEY=sk-your-api-key-here" >> ~/.code-vector-db.env
+# ~/.code-vector-db.env
+EMBEDDING_PROVIDER=zeroentropy
+ZEROENTROPY_API_KEY=ze_your_key_here
+EMBEDDING_DIMENSIONS=1280      # one of: 2560, 1280, 640, 320, 160, 80, 40
+RERANK_ENABLED=true            # zerank-1 reranking (default on for zeroentropy)
 ```
 
-**Performance Comparison** (5000+ PHP files):
-- Local embeddings (CodeT5+): ~12-15 minutes
-- OpenAI embeddings: ~2-4 minutes
-
-### Using Local Embeddings (Free, No API Key Needed)
-
-By default, the tool uses local models:
-- **Code**: Salesforce/codet5p-110m-embedding (256 dimensions)
-- **Text**: sentence-transformers/all-mpnet-base-v2 (768 dimensions)
-
-Models are automatically downloaded on first use to `~/.local/share/code-vector-db/models/`.
-
-### Advanced Configuration
-
-Create `~/.code-vector-db.env` to customize:
+### OpenAI embeddings
 
 ```bash
-# OpenAI settings
-USE_OPENAI_EMBEDDINGS=true
+EMBEDDING_PROVIDER=openai
 OPENAI_API_KEY=sk-your-key
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small   # 1536 dims
+```
 
-# Qdrant connection (remote server mode)
-QDRANT_HOST=localhost
+### Local embeddings (offline, no API key)
+
+Requires the optional ML dependencies: `pip install -e ".[local]"` (pulls torch +
+transformers + sentence-transformers). Models download on first use to
+`~/.local/share/code-vector-db/models/`.
+
+```bash
+EMBEDDING_PROVIDER=local
+# Code: Salesforce/codet5p-110m-embedding (256d); Text: all-mpnet-base-v2 (768d)
+```
+
+### Qdrant connection
+
+```bash
+# Remote server mode (default). gRPC is preferred automatically to avoid
+# Windows socket exhaustion during large indexing runs.
+QDRANT_HOST=127.0.0.1
 QDRANT_PORT=6333
+QDRANT_GRPC_PORT=6334          # set if your gRPC port isn't REST port + 1
+QDRANT_PREFER_GRPC=true
 
-# Or use embedded local mode (no server needed)
+# Or embedded local mode (no server needed)
 QDRANT_LOCAL=true
 QDRANT_LOCAL_PATH=~/.local/share/code-vector-db/qdrant-local
 ```
@@ -377,12 +397,12 @@ There are two integration modes:
 
 | Mode | Best for |
 |------|----------|
-| **MCP Server** | AI-driven search — Claude calls tools directly, no CLI needed |
+| **MCP Server** | AI-driven search - Claude calls tools directly, no CLI needed |
 | **CLI + Skill** | Human-driven search, scripting, CI, maintenance tasks |
 
 ### MCP Server
 
-The MCP (Model Context Protocol) server exposes all search capabilities as tools that Claude can call directly during a conversation — no manual CLI invocation needed.
+The MCP (Model Context Protocol) server exposes all search capabilities as tools that Claude can call directly during a conversation - no manual CLI invocation needed.
 
 **Starting the server:**
 
@@ -474,16 +494,19 @@ cp -r .claude/skills/code-vector-search ~/.claude/skills/
 # Or keep it project-specific (already in this repo)
 ```
 
-The skill is model-invoked—Claude automatically activates it when users ask questions matching the description (e.g., "find code that handles authentication").
+The skill is model-invoked-Claude automatically activates it when users ask questions matching the description (e.g., "find code that handles authentication").
 
 ## Troubleshooting
 
 ### Tree-sitter Version Issues
 
-If you see `TypeError: __init__() takes exactly 1 argument (2 given)`:
+If you see `TypeError: __init__() takes exactly 1 argument (2 given)` you are on
+the old, unmaintained `tree-sitter-languages` package. This tool now uses
+`tree-sitter-language-pack` (works with tree-sitter >= 0.22):
 
 ```bash
-pip install 'tree-sitter<0.21' --upgrade
+pip uninstall -y tree-sitter-languages
+pip install tree-sitter-language-pack 'tree-sitter>=0.22'
 ```
 
 ### Qdrant Connection Failed
@@ -505,12 +528,19 @@ The tool automatically retries with exponential backoff. For very large codebase
 
 ### Vector Dimension Mismatch
 
-If you switch between local and OpenAI embeddings, delete and reindex:
+If you switch embedding provider, model, or dimension, the vector size changes
+and existing collections become incompatible. The tool detects this and asks you
+to delete and reindex:
 
 ```bash
-code-vector-cli delete /path/to/project --force
-code-vector-cli index /path/to/project
+code-vector-cli delete --force --path /path/to/project
+code-vector-cli index --path /path/to/project
 ```
+
+### Qdrant Unreachable
+
+If a search reports a connection error to Qdrant, start the server
+(`docker compose up -d`) or switch to embedded mode (`QDRANT_LOCAL=true`).
 
 ## Development
 
@@ -522,12 +552,13 @@ code-vector-cli/
 │   ├── __init__.py
 │   ├── cli.py                 # CLI entry point and command definitions
 │   ├── mcp_server.py          # MCP server (7 search tools via stdio)
-│   ├── embeddings.py          # Embedding models (local + OpenAI)
-│   ├── vector_store.py        # Qdrant operations
+│   ├── embeddings.py          # Embedding providers (zembed-1 / OpenAI / local)
+│   ├── reranker.py            # zerank-1 cross-encoder rerank stage
+│   ├── vector_store.py        # Qdrant operations (gRPC, dimension guard)
 │   ├── indexer.py             # Main indexing logic
 │   ├── workspace_indexer.py   # Multi-repo support
-│   ├── ast_chunker.py         # Tree-sitter parsing
-│   ├── query.py               # Search interface
+│   ├── ast_chunker.py         # Tree-sitter parsing (tree-sitter-language-pack)
+│   ├── query.py               # Search interface (+ rerank, hybrid)
 │   └── metadata.py            # Project tracking
 ├── bin/
 │   └── code-vector-cli        # Shell wrapper

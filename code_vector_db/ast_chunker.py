@@ -3,7 +3,7 @@
 import hashlib
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
-from tree_sitter_languages import get_language, get_parser
+from tree_sitter_language_pack import get_language, get_parser
 
 
 class CodeChunk:
@@ -32,13 +32,44 @@ class CodeChunk:
         self.extra_metadata = extra_metadata
         self.hash = self._compute_hash()
 
+    @property
+    def embed_text(self) -> str:
+        """Text used for EMBEDDING (and keyword indexing), not for display.
+
+        Prepends a deterministic context header so the embedding captures where
+        the code lives, not just its body. This is contextual-retrieval for
+        code: no LLM needed because the AST already gives us path/parent/name.
+        The stored/displayed snippet remains self.content (clean code).
+        """
+        header_parts = []
+        if self.file_path:
+            header_parts.append(f"file: {self.file_path}")
+        if self.language and self.language != "text":
+            header_parts.append(f"language: {self.language}")
+        if self.parent:
+            header_parts.append(f"{self.chunk_type} in {self.parent}")
+        if self.name and self.name not in ("anonymous", ""):
+            header_parts.append(f"{self.chunk_type}: {self.name}")
+
+        if not header_parts:
+            return self.content
+
+        header = " | ".join(header_parts)
+        return f"{header}\n{self.content}"
+
     def _compute_hash(self) -> str:
         """Compute content hash for deduplication"""
         content_str = f"{self.file_path}:{self.start_line}:{self.content}"
         return hashlib.sha256(content_str.encode()).hexdigest()[:16]
 
     def to_dict(self) -> Dict:
-        """Convert to dictionary for storage"""
+        """Convert to dictionary for storage.
+
+        content is duplicated into metadata so it survives into the Qdrant
+        payload (only metadata is stored). The reranker and --show-content both
+        rely on having the real code available at query time. Capped to keep
+        payloads reasonable.
+        """
         return {
             "content": self.content,
             "metadata": {
@@ -50,6 +81,7 @@ class CodeChunk:
                 "parent": self.parent or "",
                 "language": self.language or "",
                 "content_hash": self.hash,
+                "content": self.content[:2000],
                 **self.extra_metadata
             }
         }
@@ -74,7 +106,7 @@ class ASTChunker:
         ".hpp": "cpp",
         ".cc": "cpp",
         ".cxx": "cpp",
-        ".cs": "c_sharp",
+        ".cs": "csharp",
         ".rb": "ruby",
         ".php": "php",
         ".swift": "swift",
@@ -83,12 +115,14 @@ class ASTChunker:
         ".sh": "bash",
         ".bash": "bash",
         ".zsh": "bash",
+        ".vue": "vue",
     }
 
     # Node types to extract as chunks
     FUNCTION_NODES = {
         "function_definition", "function_declaration", "method_definition",
-        "function_item", "function", "method", "constructor"
+        "function_item", "function", "method", "constructor",
+        "method_declaration", "constructor_declaration", "local_function_statement",  # C#
     }
 
     # Arrow functions and function expressions (JS/TS)
@@ -103,7 +137,8 @@ class ASTChunker:
 
     CLASS_NODES = {
         "class_definition", "class_declaration", "interface_declaration",
-        "struct_item", "impl_item", "trait_item"
+        "struct_item", "impl_item", "trait_item",
+        "struct_declaration", "record_declaration", "enum_declaration",  # C#
     }
 
     # Minimum lines for a function to be indexed (filter out tiny callbacks)
@@ -291,7 +326,15 @@ class ASTChunker:
         return None
 
     def _get_node_name(self, node, content: str) -> str:
-        """Extract the name of a function or class"""
+        """Extract the name of a function or class.
+
+        Prefer tree-sitter's typed `name` field (correct for languages where a
+        return type precedes the name, e.g. C#/Java/Go), then fall back to the
+        first identifier-like child.
+        """
+        named = node.child_by_field_name("name")
+        if named is not None:
+            return self._get_node_text(named, content)
         for child in node.children:
             if child.type in ["identifier", "name", "property_identifier"]:
                 return self._get_node_text(child, content)

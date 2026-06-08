@@ -675,9 +675,11 @@ class CodebaseIndexer:
                 # Make file path relative to workspace root
                 chunk.file_path = f"{self._current_repo_name}/{chunk.file_path}"
 
-        # Generate embeddings in batch
-        contents = [chunk.content for chunk in chunks]
-        embeddings = self.code_embedder.embed(contents)
+        # Generate embeddings in batch.
+        # embed_text prepends path/parent/signature context (contextual
+        # retrieval); chunk.content stays clean for display.
+        contents = [chunk.embed_text for chunk in chunks]
+        embeddings = self.code_embedder.embed(contents, input_type="document")
 
         # Prepare points
         points = []

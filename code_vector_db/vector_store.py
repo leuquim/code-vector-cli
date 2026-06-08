@@ -1,9 +1,13 @@
 """Qdrant vector store management"""
 
 import os
+import uuid
 import hashlib
 from typing import List, Dict, Optional, Any
 from pathlib import Path
+
+# Stable namespace so the same logical ID always maps to the same UUID.
+_POINT_ID_NAMESPACE = uuid.UUID("6f9619ff-8b86-d011-b42d-00cf4fc964ff")
 
 # Load .env file if it exists (before importing qdrant_client)
 try:
@@ -58,15 +62,44 @@ class VectorStore:
             # Remote server mode - check env vars for host/port
             host = os.environ.get("QDRANT_HOST", host)
             port = int(os.environ.get("QDRANT_PORT", port))
-            self.client = QdrantClient(
-                host=host,
-                port=port,
-                timeout=300  # 5 minute timeout for operations
-            )
+
+            # Prefer gRPC: a single persistent HTTP/2 connection. The REST
+            # transport opens a new TCP socket per request, which exhausts
+            # Windows ephemeral ports during large batch upserts
+            # (WinError 10048: "Only one usage of each socket address...").
+            prefer_grpc = os.environ.get("QDRANT_PREFER_GRPC", "true").lower() == "true"
+            grpc_port = int(os.environ.get("QDRANT_GRPC_PORT", 0)) or None
+
+            client_kwargs = {"host": host, "timeout": 300}
+            if prefer_grpc:
+                client_kwargs["prefer_grpc"] = True
+                client_kwargs["grpc_port"] = grpc_port or (port + 1)
+                client_kwargs["port"] = port
+            else:
+                client_kwargs["port"] = port
+
+            self.client = QdrantClient(**client_kwargs)
             self._mode = "remote"
+            self._verify_connection(host, port)
 
         self.project_path = project_path
         self.project_id = self._get_project_id(project_path)
+
+    def _verify_connection(self, host: str, port: int):
+        """Fail loudly if the Qdrant server is unreachable.
+
+        Without this, every search silently degrades to "no results", which
+        reads as an empty index rather than a down database.
+        """
+        try:
+            self.client.get_collections()
+        except Exception as e:
+            raise RuntimeError(
+                f"Cannot reach Qdrant at {host}:{port}. Is the server running?\n"
+                f"  Start it with: docker compose up -d\n"
+                f"  Or use embedded mode: set QDRANT_LOCAL=true in ~/.code-vector-db.env\n"
+                f"  (underlying error: {type(e).__name__}: {str(e)[:120]})"
+            ) from e
 
     def _get_project_id(self, project_path: str) -> str:
         """Generate unique project ID from normalized path (cross-platform compatible)"""
@@ -77,21 +110,42 @@ class VectorStore:
         """Get project-specific collection name"""
         return f"{self.project_id}_{base_name}"
 
-    def initialize_collections(self):
-        """Create all collections for the project"""
-        # Detect which embedder is being used via environment variable
-        use_openai = os.environ.get("USE_OPENAI_EMBEDDINGS", "").lower() == "true"
+    @staticmethod
+    def _to_point_id(raw_id: Any) -> Any:
+        """Coerce an arbitrary id into a Qdrant-valid point id.
 
-        if use_openai:
-            # OpenAI embeddings: text-embedding-3-small = 1536 dimensions
-            code_vector_size = 1536
-            text_vector_size = 1536
-            print(f"  Using OpenAI embeddings (1536 dimensions)")
-        else:
-            # Local embeddings: CodeT5+ = 256, mpnet = 768
-            code_vector_size = 256
-            text_vector_size = 768
-            print(f"  Using local embeddings (CodeT5+: 256, mpnet: 768 dimensions)")
+        Qdrant accepts only UUID strings or unsigned ints. Ints and
+        already-valid UUIDs pass through; everything else (commit SHAs,
+        path:line keys, md5 hexdigests) maps to a deterministic UUID5 so
+        re-upserting the same logical point overwrites rather than duplicates.
+        """
+        if isinstance(raw_id, int):
+            return raw_id
+        s = str(raw_id)
+        try:
+            return str(uuid.UUID(s))  # already a valid UUID
+        except (ValueError, AttributeError, TypeError):
+            return str(uuid.uuid5(_POINT_ID_NAMESPACE, s))
+
+    def initialize_collections(self):
+        """Create all collections for the project.
+
+        Vector sizes are derived from the active embedding provider (single
+        source of truth in embeddings.py) rather than hardcoded. With the
+        default zembed-1 provider, code and text share one dimension.
+        """
+        from code_vector_db.embeddings import (
+            get_provider, get_code_dimension, get_text_dimension
+        )
+
+        provider = get_provider()
+        code_vector_size = get_code_dimension()
+        text_vector_size = get_text_dimension()
+        print(f"  Using {provider} embeddings (code: {code_vector_size}, text: {text_vector_size} dimensions)")
+
+        # Guard against silent corruption: if collections already exist at a
+        # different dimension (e.g. provider was switched), fail loudly.
+        self._check_dimension_compatibility(code_vector_size, text_vector_size, provider)
 
         # Code collections
         for collection in [self.CODE_FUNCTIONS, self.CODE_CLASSES, self.CODE_FILES]:
@@ -108,6 +162,39 @@ class VectorStore:
                 vector_size=text_vector_size,
                 distance=Distance.COSINE
             )
+
+    def _check_dimension_compatibility(self, code_size: int, text_size: int, provider: str):
+        """Fail loudly if existing collections were built at a different dimension.
+
+        Switching embedding providers/dimensions without reindexing silently
+        corrupts search (vectors of different sizes can't be compared). Detect
+        the mismatch up front and tell the user exactly what to do.
+        """
+        checks = [
+            (self.CODE_FUNCTIONS, code_size),
+            (self.DOCUMENTATION, text_size),
+        ]
+        for base_name, expected in checks:
+            name = self._collection_name(base_name)
+            try:
+                info = self.client.get_collection(name)
+            except Exception:
+                continue  # doesn't exist yet — nothing to conflict with
+
+            try:
+                existing = info.config.params.vectors.size
+            except Exception:
+                continue  # can't read size — skip the guard rather than crash
+
+            if existing != expected:
+                raise RuntimeError(
+                    f"Embedding dimension mismatch for this project.\n"
+                    f"  Existing collections were built at {existing} dimensions, "
+                    f"but the current provider '{provider}' produces {expected}.\n"
+                    f"  You changed embedding provider/model/dimension. Delete and reindex:\n"
+                    f"    code-vector-cli delete --force\n"
+                    f"    code-vector-cli index"
+                )
 
     def _create_collection(self, name: str, vector_size: int, distance: Distance):
         """Create a collection with optimal configuration"""
@@ -162,12 +249,15 @@ class VectorStore:
         # Convert all points to Qdrant format first
         qdrant_points = []
         for i, point in enumerate(points):
-            point_id = point.get("id", hashlib.md5(
-                f"{point['metadata']['file_path']}:{point['metadata']['start_line']}".encode()
-            ).hexdigest())
-
+            raw_id = point.get(
+                "id",
+                f"{point['metadata']['file_path']}:{point['metadata']['start_line']}"
+            )
+            # Qdrant only accepts UUID or unsigned-int point IDs. Commit SHAs and
+            # path:line strings are neither, so map any string to a deterministic
+            # UUID5 (stable across runs -> idempotent upserts).
             qdrant_points.append(PointStruct(
-                id=point_id,
+                id=self._to_point_id(raw_id),
                 vector=point["vector"],
                 payload=point["metadata"]
             ))

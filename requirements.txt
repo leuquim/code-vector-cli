@@ -1,14 +1,21 @@
-# Core dependencies
-torch>=2.0.0
-sentence-transformers>=2.2.0
-transformers>=4.30.0
+# Core dependencies (cloud-first default: zembed-1 embeddings + zerank-1 rerank)
 
-# Tree-sitter for AST parsing (version pinned due to compatibility)
-tree-sitter>=0.20.0,<0.21
-tree-sitter-languages>=1.10.0
+# Cloud embeddings + reranking (default provider)
+# Only pre-release is published; >=0.1.0a1 opts into accepting the alpha.
+zeroentropy>=0.1.0a1
+
+# OpenAI embeddings (alternative cloud provider)
+openai>=1.0.0
+
+# Tree-sitter for AST parsing (maintained successor to tree-sitter-languages)
+tree-sitter>=0.22.0
+tree-sitter-language-pack>=1.0.0
 
 # Vector database
 qdrant-client>=1.7.0
+
+# Hybrid search (fast BM25 keyword ranking; ~500x faster than rank_bm25)
+bm25s>=0.2.0
 
 # Configuration
 python-dotenv>=1.0.0
@@ -16,8 +23,6 @@ python-dotenv>=1.0.0
 # MCP server
 mcp>=1.0.0
 
-# Hybrid search (BM25 ranking)
-rank_bm25>=0.2.2
-
-# Optional: OpenAI embeddings (for faster indexing)
-openai>=1.0.0
+# Local embeddings (optional, offline, no API key) are an extra:
+#   pip install -e ".[local]"
+# which pulls torch + transformers + sentence-transformers.

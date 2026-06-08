@@ -47,6 +47,10 @@ def cmd_init(args):
 def cmd_index(args):
     """Index the codebase"""
     indexer = CodebaseIndexer(args.project_path)
+    # Ensure collections exist before upserting. Idempotent when they already
+    # exist, but required on a fresh/deleted project — otherwise upserts fail
+    # with "Collection doesn't exist".
+    indexer.initialize()
     repo_filter = getattr(args, 'repo', None)
     indexer.index_codebase(incremental=args.incremental, repo_filter=repo_filter)
 
@@ -841,7 +845,7 @@ def main():
     _add_path_arg(similar_parser)
     similar_parser.add_argument("query", help="File path OR semantic query")
     similar_parser.add_argument("-n", "--limit", type=int, default=10, help="Number of results")
-    similar_parser.add_argument("-t", "--threshold", type=float, default=0.7, help="Score threshold (0.0-1.0)")
+    similar_parser.add_argument("-t", "--threshold", type=float, default=0.5, help="Score threshold (0.0-1.0)")
     similar_parser.add_argument("--show-content", action="store_true", help="Show code snippets")
     similar_parser.add_argument("-C", "--context-lines", type=int, default=3, help="Context lines (default: 3)")
     similar_parser.add_argument("--json", action="store_true", help="Output as JSON")

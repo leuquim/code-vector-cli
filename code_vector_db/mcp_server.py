@@ -9,7 +9,14 @@ from mcp.server.fastmcp import FastMCP
 # Create server
 mcp = FastMCP(
     "code-vector-db",
-    instructions="Semantic code search powered by vector embeddings"
+    instructions=(
+        "Semantic code search over a local vector index (zembed-1 embeddings + "
+        "zerank-1 reranking). Use semantic_search for conceptual queries and "
+        "hybrid_search when you know specific identifiers/filenames. get_context "
+        "gathers relevant files for a task; analyze_impact finds code affected by "
+        "a change before refactoring. Results include file_path and line ranges "
+        "you can open directly."
+    )
 )
 
 # Lazy singleton for QueryInterface
@@ -39,7 +46,10 @@ def set_project_path(path: str):
 def semantic_search(query: str, limit: int = 10, threshold: float = 0.3, repo: Optional[str] = None) -> str:
     """Search code semantically using natural language.
 
-    Find functions, classes, and files by describing what they do.
+    Find functions, classes, and files by describing what they do. Results are
+    retrieved by vector similarity then reordered by a cross-encoder reranker
+    for precision; each result includes file_path, line range, score, and
+    rerank_score (when reranking is active).
     Examples: "user authentication logic", "database connection pooling", "error handling middleware"
 
     Args:
@@ -55,10 +65,11 @@ def semantic_search(query: str, limit: int = 10, threshold: float = 0.3, repo: O
 
 @mcp.tool()
 def hybrid_search(query: str, limit: int = 10, threshold: float = 0.3, repo: Optional[str] = None) -> str:
-    """Hybrid search combining semantic similarity with BM25 keyword matching.
+    """Hybrid search: vector similarity fused with BM25 keyword matching, then reranked.
 
     Better than semantic_search when you know specific identifiers or filenames.
-    Examples: "UpdatePausedTimeResource", "handleCheckout function", "toast error notification"
+    Dense retrieval and keyword scores select candidates; a cross-encoder makes
+    the final ordering. Examples: "UpdatePausedTimeResource", "handleCheckout function", "toast error notification"
 
     Args:
         query: Search query (can include code identifiers)

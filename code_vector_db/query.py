@@ -11,6 +11,7 @@ class SearchResult:
 
     def __init__(self, score: float, metadata: Dict[str, Any]):
         self.score = score
+        self.rerank_score = None  # set when a reranker reorders this result
         self.file_path = metadata.get("file_path", "")
         self.name = metadata.get("name", "")
         self.type = metadata.get("type", "")
@@ -32,6 +33,8 @@ class SearchResult:
             "language": self.language,
             "parent": self.parent,
         }
+        if self.rerank_score is not None:
+            d["rerank_score"] = round(self.rerank_score, 3)
         repo = self.metadata.get("repo")
         if repo:
             d["repo"] = repo
@@ -111,21 +114,105 @@ class QueryInterface:
 
         return deduplicated
 
+    def _result_text_for_rerank(self, result: "SearchResult") -> str:
+        """Build the text a cross-encoder should score for a result.
+
+        Prefer the real code/doc content (stored in the payload); fall back to a
+        synthetic context line built from identifiers when content is absent.
+        """
+        content = result.content or ""
+        header = " ".join(p for p in [result.file_path, result.parent, result.name] if p)
+        if content:
+            return f"{header}\n{content}".strip()
+        return f"{header} ({result.type})".strip()
+
+    def _maybe_rerank(
+        self,
+        query_text: Optional[str],
+        results: List["SearchResult"],
+        limit: int
+    ) -> List["SearchResult"]:
+        """Rerank with zerank-1 when enabled; otherwise just truncate."""
+        from .reranker import rerank_enabled, get_reranker
+
+        if not query_text or not results or not rerank_enabled():
+            return results[:limit]
+
+        def _set_score(r, s):
+            r.rerank_score = s
+
+        reranked = get_reranker().rerank(
+            query=query_text,
+            candidates=results,
+            get_text=self._result_text_for_rerank,
+            top_n=limit,
+            set_score=_set_score,
+        )
+        return reranked[:limit]
+
+    def _vector_pool(
+        self,
+        query_vector: List[float],
+        limit: int = 50,
+        filters: Optional[Dict] = None,
+        threshold: float = 0.3,
+    ) -> List[SearchResult]:
+        """Return a deduplicated candidate pool by pure vector score (no rerank).
+
+        Used by hybrid search, which fuses keyword scores then reranks once at
+        the end. Keeping retrieval and reranking separate avoids double-ordering.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        collections = [
+            VectorStore.CODE_FUNCTIONS,
+            VectorStore.CODE_CLASSES,
+            VectorStore.CODE_FILES,
+        ]
+        results = []
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(
+                    self.vector_store.search,
+                    collection=c, query_vector=query_vector,
+                    limit=limit, filters=filters, score_threshold=threshold,
+                ): c for c in collections
+            }
+            for future in as_completed(futures):
+                try:
+                    results.extend(future.result())
+                except Exception as e:
+                    print(f"Error searching collection {futures[future]}: {e}")
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+        search_results = [SearchResult(r["score"], r["metadata"]) for r in results]
+        return self._deduplicate_results(search_results)
+
     def _search_parallel(
         self,
         query_vector: List[float],
         limit: int = 10,
         filters: Optional[Dict] = None,
-        threshold: float = 0.3
+        threshold: float = 0.3,
+        query_text: Optional[str] = None,
     ) -> List[SearchResult]:
-        """Helper to run searches across code collections in parallel"""
+        """Run searches across code collections in parallel, then rerank.
+
+        When reranking is enabled we gather a WIDER candidate pool per collection
+        so the cross-encoder has real choices, then reorder to `limit`.
+        query_text is the raw search string the reranker scores against.
+        """
         from concurrent.futures import ThreadPoolExecutor, as_completed
+        from .reranker import rerank_enabled
 
         collections = [
             VectorStore.CODE_FUNCTIONS,
             VectorStore.CODE_CLASSES,
             VectorStore.CODE_FILES
         ]
+
+        # Widen the pool when we'll rerank (more candidates -> better top-N).
+        pool_limit = max(limit, 30) if (query_text and rerank_enabled()) else limit
 
         results = []
 
@@ -135,7 +222,7 @@ class QueryInterface:
                     self.vector_store.search,
                     collection=collection,
                     query_vector=query_vector,
-                    limit=limit,
+                    limit=pool_limit,
                     filters=filters,
                     score_threshold=threshold
                 ): collection for collection in collections
@@ -148,14 +235,13 @@ class QueryInterface:
                 except Exception as e:
                     print(f"Error searching collection {future_to_collection[future]}: {e}")
 
-        # Sort by score and limit
+        # Sort by vector score, build results, dedup overlapping ranges
         results.sort(key=lambda x: x["score"], reverse=True)
         search_results = [SearchResult(r["score"], r["metadata"]) for r in results]
-
-        # Deduplicate overlapping results
         search_results = self._deduplicate_results(search_results)
 
-        return search_results[:limit]
+        # Final stage: cross-encoder rerank to the requested limit
+        return self._maybe_rerank(query_text, search_results, limit)
 
     def search_code(
         self,
@@ -166,14 +252,14 @@ class QueryInterface:
         repo: Optional[str] = None
     ) -> List[SearchResult]:
         """Search for code using semantic similarity across multiple collections in parallel"""
-        query_vector = self.code_embedder.embed(query)[0]
+        query_vector = self.code_embedder.embed(query, input_type="query")[0]
 
         # Build filters
         search_filters = dict(filters) if filters else {}
         if repo:
             search_filters["repo"] = repo
 
-        return self._search_parallel(query_vector, limit, search_filters or None, threshold)
+        return self._search_parallel(query_vector, limit, search_filters or None, threshold, query_text=query)
 
     def search_documentation(
         self,
@@ -182,7 +268,7 @@ class QueryInterface:
         threshold: float = 0.3
     ) -> List[SearchResult]:
         """Search documentation"""
-        query_vector = self.text_embedder.embed(query)[0]
+        query_vector = self.text_embedder.embed(query, input_type="query")[0]
 
         results = self.vector_store.search(
             collection=VectorStore.DOCUMENTATION,
@@ -200,7 +286,7 @@ class QueryInterface:
         threshold: float = 0.3
     ) -> List[SearchResult]:
         """Search conversation history"""
-        query_vector = self.text_embedder.embed(query)[0]
+        query_vector = self.text_embedder.embed(query, input_type="query")[0]
 
         results = self.vector_store.search(
             collection=VectorStore.CONVERSATIONS,
@@ -210,19 +296,6 @@ class QueryInterface:
         )
 
         return [SearchResult(r["score"], r["metadata"]) for r in results]
-
-    def search_hybrid(
-        self,
-        query: str,
-        limit: int = 10,
-        threshold: float = 0.3
-    ) -> Dict[str, List[SearchResult]]:
-        """Search across code, docs, and conversations"""
-        return {
-            "code": self.search_code(query, limit=limit // 3, threshold=threshold),
-            "documentation": self.search_documentation(query, limit=limit // 3, threshold=threshold),
-            "conversations": self.search_conversations(query, limit=limit // 3, threshold=threshold)
-        }
 
     def find_similar_to_file(
         self,
@@ -242,11 +315,11 @@ class QueryInterface:
             print(f"Warning: Could not read file {file_path}: {e}")
             return []
 
-        # Generate embedding
-        query_vector = self.code_embedder.embed(content)[0]
+        # Generate embedding (searching WITH this file's content -> query side)
+        query_vector = self.code_embedder.embed(content, input_type="query")[0]
 
-        # Use parallel search
-        results = self._search_parallel(query_vector, limit, threshold=threshold)
+        # Use parallel search (rerank against the file's own content)
+        results = self._search_parallel(query_vector, limit, threshold=threshold, query_text=content[:4000])
 
         # Filter out the file itself
         results = [r for r in results if r.file_path != str(path)]
@@ -266,9 +339,9 @@ class QueryInterface:
             return self.find_similar_to_file(str(path), limit, threshold)
 
         # Otherwise treat as semantic query
-        query_vector = self.code_embedder.embed(query)[0]
+        query_vector = self.code_embedder.embed(query, input_type="query")[0]
         filters = {"repo": repo} if repo else None
-        return self._search_parallel(query_vector, limit, filters, threshold=threshold)
+        return self._search_parallel(query_vector, limit, filters, threshold=threshold, query_text=query)
 
     def get_context_for_task(
         self,
@@ -370,48 +443,46 @@ class QueryInterface:
             bm25_weight: Weight for BM25 scores (0-1)
             semantic_weight: Weight for semantic scores (0-1)
             repo: Filter by repository name
+
+        Pipeline: dense retrieval builds a wide pool -> bm25s keyword scores are
+        fused in (weighted) to SELECT the candidates -> zerank-1 (if enabled)
+        does the FINAL ordering. When reranking is off, the fused score orders
+        results directly.
         """
-        from rank_bm25 import BM25Okapi
-        import numpy as np
+        import bm25s
 
-        # Get semantic results (broader set for re-ranking)
-        semantic_results = self.search_code(query, limit=limit * 3, threshold=max(0.1, threshold - 0.2), repo=repo)
+        # Dense candidate pool WITHOUT internal reranking (we rerank once at the
+        # end). Pull the raw vector results via a dedicated pool helper.
+        query_vector = self.code_embedder.embed(query, input_type="query")[0]
+        filters = {"repo": repo} if repo else None
+        pool = self._vector_pool(query_vector, limit=limit * 5,
+                                 filters=filters, threshold=max(0.1, threshold - 0.2))
 
-        if not semantic_results:
+        if not pool:
             return []
 
-        # Build BM25 index from semantic results
-        corpus = []
-        for result in semantic_results:
-            # Combine name, type, and file path for keyword matching
-            doc_text = f"{result.name} {result.type} {result.file_path}"
-            corpus.append(doc_text.lower().split())
+        # bm25s keyword scoring over real content (path + parent + name + code).
+        corpus = [self._result_text_for_rerank(r).lower() for r in pool]
+        corpus_tokens = bm25s.tokenize(corpus, stopwords=None, show_progress=False)
+        retriever = bm25s.BM25()
+        retriever.index(corpus_tokens, show_progress=False)
 
-        bm25 = BM25Okapi(corpus)
-        query_tokens = query.lower().split()
-        bm25_scores = bm25.get_scores(query_tokens)
+        query_tokens = bm25s.tokenize(query.lower(), stopwords=None, show_progress=False)
+        # Score every doc in the pool (k = pool size) and remap to pool order.
+        idxs, scores = retriever.retrieve(query_tokens, k=len(pool), show_progress=False)
+        bm25_by_idx = {int(i): float(s) for i, s in zip(idxs[0], scores[0])}
+        max_bm25 = max(bm25_by_idx.values()) if bm25_by_idx and max(bm25_by_idx.values()) > 0 else 1.0
 
-        # Normalize scores to 0-1 range
-        max_bm25 = max(bm25_scores) if max(bm25_scores) > 0 else 1
-        bm25_normalized = bm25_scores / max_bm25
+        # Fuse dense + keyword to select/score candidates.
+        for i, result in enumerate(pool):
+            bm25_norm = bm25_by_idx.get(i, 0.0) / max_bm25
+            result.score = semantic_weight * result.score + bm25_weight * bm25_norm
 
-        # Combine scores
-        combined_results = []
-        for i, result in enumerate(semantic_results):
-            combined_score = (
-                semantic_weight * result.score +
-                bm25_weight * bm25_normalized[i]
-            )
+        pool.sort(key=lambda r: r.score, reverse=True)
 
-            # Create new result with combined score
-            combined_result = SearchResult(combined_score, result.metadata)
-            combined_results.append(combined_result)
-
-        # Sort by combined score and apply threshold
-        combined_results.sort(key=lambda x: x.score, reverse=True)
-        filtered_results = [r for r in combined_results if r.score >= threshold]
-
-        return filtered_results[:limit]
+        # Final stage: zerank-1 reranks the fused top candidates (graceful
+        # fallback to fused order when disabled/unavailable).
+        return self._maybe_rerank(query, pool, limit)
 
     def search_git_history(
         self,
@@ -421,7 +492,7 @@ class QueryInterface:
         repo: Optional[str] = None
     ) -> List[SearchResult]:
         """Search git commit history"""
-        query_vector = self.text_embedder.embed(query)[0]
+        query_vector = self.text_embedder.embed(query, input_type="query")[0]
 
         filters = {"repo": repo} if repo else None
 
