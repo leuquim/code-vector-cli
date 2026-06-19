@@ -211,7 +211,8 @@ class VectorStore:
                 collection_name=name,
                 vectors_config=VectorParams(
                     size=vector_size,
-                    distance=distance
+                    distance=distance,
+                    on_disk=True  # f32 originals only rescore; int8 copies serve search from RAM
                 ),
                 hnsw_config=HnswConfigDiff(
                     m=16,
@@ -221,13 +222,15 @@ class VectorStore:
                 quantization_config=ScalarQuantization(
                     scalar=ScalarQuantizationConfig(
                         type=ScalarType.INT8,
-                        quantile=0.99
+                        quantile=0.99,
+                        always_ram=True
                     )
                 ),
                 optimizers_config=OptimizersConfigDiff(
-                    indexing_threshold=50000,  # Higher threshold reduces segments
-                    max_segment_size=200000,   # Larger segments
-                    memmap_threshold=50000     # Use memory mapping for large segments
+                    default_segment_number=2,
+                    # Unit is KB of vectors per segment, NOT a point count. Must stay
+                    # below segment size or HNSW never builds and searches full-scan.
+                    indexing_threshold=10000
                 )
             )
             print(f"[OK] Created collection: {name}")

@@ -336,11 +336,11 @@ class ZeroEntropyEmbedder:
 # OpenAI embedder (cloud)
 # ---------------------------------------------------------------------------
 
-try:
-    from openai import OpenAI  # noqa: F401
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
+# Probe availability without importing: `import openai` costs ~1.2s and would
+# be paid on every CLI invocation even when the provider is zeroentropy.
+import importlib.util
+
+OPENAI_AVAILABLE = importlib.util.find_spec("openai") is not None
 
 
 class OpenAIEmbedder:

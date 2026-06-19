@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   qdrant:
-    image: qdrant/qdrant:latest
+    image: qdrant/qdrant:v1.18.2
     container_name: qdrant
     ports:
       - "6335:6333"  # REST API (host:container)
@@ -10,6 +8,8 @@ services:
     volumes:
       - qdrant_storage:/qdrant/storage
     restart: unless-stopped
+    # Data is mmap'd; the kernel happily fills GBs of page cache without a cap.
+    mem_limit: 1g
     environment:
       - QDRANT__SERVICE__GRPC_PORT=6334
 
